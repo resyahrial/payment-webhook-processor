@@ -32,8 +32,13 @@ func TestWebhookEventRepositoryInsertStoresValidEvent(t *testing.T) {
 		RawPayload:      []byte(`{"provider_event_id":"evt_201","payment_id":"pay_201","event_type":"payment.pending","event_timestamp":"2026-06-17T10:30:00Z"}`),
 	}
 
-	if err := repo.Insert(ctx, event); err != nil {
+	id, err := repo.Insert(ctx, event)
+	if err != nil {
 		t.Fatalf("insert event: %v", err)
+	}
+
+	if id == 0 {
+		t.Fatal("expected stored event id")
 	}
 
 	assertStoredEvent(t, ctx, testDB, event)
@@ -56,11 +61,11 @@ func TestWebhookEventRepositoryInsertRejectsDuplicateProviderEventID(t *testing.
 		RawPayload:      []byte(`{"provider_event_id":"evt_202","payment_id":"pay_202","event_type":"payment.paid","event_timestamp":"2026-06-17T11:30:00Z"}`),
 	}
 
-	if err := repo.Insert(ctx, event); err != nil {
+	if _, err := repo.Insert(ctx, event); err != nil {
 		t.Fatalf("insert first event: %v", err)
 	}
 
-	err := repo.Insert(ctx, event)
+	_, err := repo.Insert(ctx, event)
 	if !errors.Is(err, ErrDuplicateProviderEventID) {
 		t.Fatalf("expected ErrDuplicateProviderEventID, got %v", err)
 	}
@@ -90,11 +95,11 @@ func TestWebhookEventRepositoryInsertAllowsSamePaymentIDWithDifferentProviderEve
 		RawPayload:      []byte(`{"provider_event_id":"evt_202_b","payment_id":"pay_202","event_type":"payment.paid","event_timestamp":"2026-06-17T11:35:00Z"}`),
 	}
 
-	if err := repo.Insert(ctx, firstEvent); err != nil {
+	if _, err := repo.Insert(ctx, firstEvent); err != nil {
 		t.Fatalf("insert first event: %v", err)
 	}
 
-	if err := repo.Insert(ctx, secondEvent); err != nil {
+	if _, err := repo.Insert(ctx, secondEvent); err != nil {
 		t.Fatalf("insert second event: %v", err)
 	}
 
@@ -139,7 +144,7 @@ func TestWebhookEventRepositoryInsertSupportsAllEventTypes(t *testing.T) {
 				)),
 			}
 
-			if err := repo.Insert(ctx, event); err != nil {
+			if _, err := repo.Insert(ctx, event); err != nil {
 				t.Fatalf("insert event: %v", err)
 			}
 
@@ -168,7 +173,7 @@ func TestWebhookEventRepositoryInsertReturnsDatabaseErrors(t *testing.T) {
 		t.Fatalf("close test database: %v", err)
 	}
 
-	err := repo.Insert(ctx, event)
+	_, err := repo.Insert(ctx, event)
 	if err == nil {
 		t.Fatal("expected database error, got nil")
 	}

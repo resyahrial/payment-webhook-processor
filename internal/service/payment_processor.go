@@ -28,18 +28,19 @@ type PaymentProcessingResult struct {
 }
 
 type PaymentProcessor struct {
-	repository PaymentStateRepository
+	repository      PaymentStateRepository
+	anomalyRecorder AnomalyRecorder
 }
 
-func NewPaymentProcessor(repository PaymentStateRepository) *PaymentProcessor {
-	return &PaymentProcessor{repository: repository}
+func NewPaymentProcessor(repository PaymentStateRepository, anomalyRecorder AnomalyRecorder) *PaymentProcessor {
+	return &PaymentProcessor{repository: repository, anomalyRecorder: anomalyRecorder}
 }
 
-func (p *PaymentProcessor) Process(ctx context.Context, event webhook.PaymentEvent) (PaymentProcessingResult, error) {
-	current, err := p.repository.GetByPaymentID(ctx, event.PaymentID)
+func (p *PaymentProcessor) Process(ctx context.Context, update PaymentUpdate) (PaymentProcessingResult, error) {
+	current, err := p.repository.GetByPaymentID(ctx, update.Event.PaymentID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPaymentNotFound) {
-			if err := p.repository.Upsert(ctx, paymentFromEvent(event)); err != nil {
+			if err := p.repository.Upsert(ctx, paymentFromEvent(update.Event)); err != nil {
 				return PaymentProcessingResult{Status: PaymentProcessingStatusFailed}, fmt.Errorf("create payment state: %w", err)
 			}
 
@@ -49,20 +50,32 @@ func (p *PaymentProcessor) Process(ctx context.Context, event webhook.PaymentEve
 		return PaymentProcessingResult{Status: PaymentProcessingStatusFailed}, fmt.Errorf("get current payment state: %w", err)
 	}
 
-	if !event.EventTimestamp.After(current.StatusTimestamp) {
+	p.recordAnomalies(ctx, DetectAnomalies(current, update.Event, update.WebhookEventID))
+
+	if !update.Event.EventTimestamp.After(current.StatusTimestamp) {
 		return PaymentProcessingResult{Status: PaymentProcessingStatusIgnored}, nil
 	}
 
-	if err := p.repository.Upsert(ctx, paymentFromEvent(event)); err != nil {
+	if err := p.repository.Upsert(ctx, paymentFromEvent(update.Event)); err != nil {
 		return PaymentProcessingResult{Status: PaymentProcessingStatusFailed}, fmt.Errorf("update payment state: %w", err)
 	}
 
 	return PaymentProcessingResult{Status: PaymentProcessingStatusUpdated}, nil
 }
 
-func (p *PaymentProcessor) Update(ctx context.Context, event webhook.PaymentEvent) error {
-	_, err := p.Process(ctx, event)
+func (p *PaymentProcessor) Update(ctx context.Context, update PaymentUpdate) error {
+	_, err := p.Process(ctx, update)
 	return err
+}
+
+func (p *PaymentProcessor) recordAnomalies(ctx context.Context, anomalies []repository.Anomaly) {
+	if p.anomalyRecorder == nil {
+		return
+	}
+
+	for _, anomaly := range anomalies {
+		_ = p.anomalyRecorder.Record(ctx, anomaly)
+	}
 }
 
 func paymentFromEvent(event webhook.PaymentEvent) repository.Payment {

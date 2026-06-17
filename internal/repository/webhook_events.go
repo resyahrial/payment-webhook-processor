@@ -23,8 +23,9 @@ func NewWebhookEventRepository(db *sql.DB) *WebhookEventRepository {
 	return &WebhookEventRepository{db: db}
 }
 
-func (r *WebhookEventRepository) Insert(ctx context.Context, event webhook.PaymentEvent) error {
-	_, err := r.db.ExecContext(ctx, `
+func (r *WebhookEventRepository) Insert(ctx context.Context, event webhook.PaymentEvent) (int64, error) {
+	var id int64
+	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO webhook_events (
 			provider_event_id,
 			payment_id,
@@ -33,6 +34,7 @@ func (r *WebhookEventRepository) Insert(ctx context.Context, event webhook.Payme
 			raw_payload,
 			processing_status
 		) VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+		RETURNING id
 	`,
 		event.ProviderEventID,
 		event.PaymentID,
@@ -40,16 +42,16 @@ func (r *WebhookEventRepository) Insert(ctx context.Context, event webhook.Payme
 		event.EventTimestamp,
 		string(event.RawPayload),
 		ProcessingStatusPending,
-	)
+	).Scan(&id)
 	if err != nil {
 		if isDuplicateProviderEventIDError(err) {
-			return ErrDuplicateProviderEventID
+			return 0, ErrDuplicateProviderEventID
 		}
 
-		return fmt.Errorf("insert webhook event: %w", err)
+		return 0, fmt.Errorf("insert webhook event: %w", err)
 	}
 
-	return nil
+	return id, nil
 }
 
 func isDuplicateProviderEventIDError(err error) bool {

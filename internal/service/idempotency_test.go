@@ -36,8 +36,12 @@ func TestIdempotencyServiceProcessStoresNewEventAndUpdatesPaymentState(t *testin
 		t.Fatalf("expected 1 payment update call, got %d", updater.calls)
 	}
 
-	if updater.events[0].ProviderEventID != event.ProviderEventID {
-		t.Fatalf("expected updater to receive provider event id %q, got %q", event.ProviderEventID, updater.events[0].ProviderEventID)
+	if updater.updates[0].Event.ProviderEventID != event.ProviderEventID {
+		t.Fatalf("expected updater to receive provider event id %q, got %q", event.ProviderEventID, updater.updates[0].Event.ProviderEventID)
+	}
+
+	if updater.updates[0].WebhookEventID != 501 {
+		t.Fatalf("expected updater to receive webhook event id %d, got %d", 501, updater.updates[0].WebhookEventID)
 	}
 }
 
@@ -68,7 +72,7 @@ func TestIdempotencyServiceProcessDoesNotTreatDifferentProviderEventIDAsDuplicat
 	t.Parallel()
 
 	ctx := context.Background()
-	repo := &stubWebhookEventRepository{}
+	repo := &stubWebhookEventRepository{insertedID: 502}
 	updater := &stubPaymentUpdater{}
 	svc := NewIdempotencyService(repo, updater.Update)
 
@@ -124,7 +128,7 @@ func TestIdempotencyServiceProcessReturnsPaymentUpdateErrors(t *testing.T) {
 	ctx := context.Background()
 	event := testPaymentEvent("evt_305", "pay_305", webhook.EventTypePaymentExpired)
 	updateErr := errors.New("payment update failed")
-	repo := &stubWebhookEventRepository{}
+	repo := &stubWebhookEventRepository{insertedID: 503}
 	updater := &stubPaymentUpdater{err: updateErr}
 
 	svc := NewIdempotencyService(repo, updater.Update)
@@ -140,25 +144,34 @@ func TestIdempotencyServiceProcessReturnsPaymentUpdateErrors(t *testing.T) {
 
 type stubWebhookEventRepository struct {
 	insertCalls int
+	insertedID  int64
 	insertErr   error
 	events      []webhook.PaymentEvent
 }
 
-func (s *stubWebhookEventRepository) Insert(ctx context.Context, event webhook.PaymentEvent) error {
+func (s *stubWebhookEventRepository) Insert(ctx context.Context, event webhook.PaymentEvent) (int64, error) {
 	s.insertCalls++
 	s.events = append(s.events, event)
-	return s.insertErr
+	if s.insertErr != nil {
+		return 0, s.insertErr
+	}
+
+	if s.insertedID == 0 {
+		s.insertedID = 501
+	}
+
+	return s.insertedID, nil
 }
 
 type stubPaymentUpdater struct {
-	calls  int
-	err    error
-	events []webhook.PaymentEvent
+	calls   int
+	err     error
+	updates []PaymentUpdate
 }
 
-func (s *stubPaymentUpdater) Update(ctx context.Context, event webhook.PaymentEvent) error {
+func (s *stubPaymentUpdater) Update(ctx context.Context, update PaymentUpdate) error {
 	s.calls++
-	s.events = append(s.events, event)
+	s.updates = append(s.updates, update)
 	return s.err
 }
 

@@ -10,10 +10,15 @@ import (
 )
 
 type WebhookEventRepository interface {
-	Insert(ctx context.Context, event webhook.PaymentEvent) error
+	Insert(ctx context.Context, event webhook.PaymentEvent) (int64, error)
 }
 
-type PaymentUpdater func(ctx context.Context, event webhook.PaymentEvent) error
+type PaymentUpdate struct {
+	Event          webhook.PaymentEvent
+	WebhookEventID int64
+}
+
+type PaymentUpdater func(ctx context.Context, update PaymentUpdate) error
 
 type ResultStatus string
 
@@ -39,7 +44,8 @@ func NewIdempotencyService(repository WebhookEventRepository, updatePayment Paym
 }
 
 func (s *IdempotencyService) Process(ctx context.Context, event webhook.PaymentEvent) (Result, error) {
-	if err := s.repository.Insert(ctx, event); err != nil {
+	webhookEventID, err := s.repository.Insert(ctx, event)
+	if err != nil {
 		if errors.Is(err, repository.ErrDuplicateProviderEventID) {
 			return Result{Status: ResultStatusDuplicate}, nil
 		}
@@ -47,7 +53,7 @@ func (s *IdempotencyService) Process(ctx context.Context, event webhook.PaymentE
 		return Result{}, fmt.Errorf("store webhook event: %w", err)
 	}
 
-	if err := s.updatePayment(ctx, event); err != nil {
+	if err := s.updatePayment(ctx, PaymentUpdate{Event: event, WebhookEventID: webhookEventID}); err != nil {
 		return Result{}, fmt.Errorf("update payment state: %w", err)
 	}
 
