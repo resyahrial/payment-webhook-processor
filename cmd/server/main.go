@@ -11,13 +11,34 @@ import (
 	"time"
 
 	"payment-webhook-processor/internal/config"
+	"payment-webhook-processor/internal/db"
 	apphttp "payment-webhook-processor/internal/http"
 )
 
 const shutdownTimeout = 10 * time.Second
+const startupTimeout = 10 * time.Second
 
 func main() {
 	cfg := config.Load()
+	startupCtx, cancelStartup := context.WithTimeout(context.Background(), startupTimeout)
+	defer cancelStartup()
+
+	database, err := db.Open(startupCtx, cfg.DatabaseURL)
+	if err != nil {
+		log.Printf("database initialization failed: %v", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			log.Printf("database close failed: %v", err)
+		}
+	}()
+
+	if err := db.RunMigrations(startupCtx, database); err != nil {
+		log.Printf("database migration failed: %v", err)
+		os.Exit(1)
+	}
+
 	server := &stdhttp.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: apphttp.NewRouter(),
