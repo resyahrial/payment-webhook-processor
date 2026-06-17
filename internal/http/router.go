@@ -15,7 +15,7 @@ func NewRouter(webhookHandler stdhttp.Handler) stdhttp.Handler {
 	if webhookHandler != nil {
 		mux.Handle("/webhooks/payment", webhookHandler)
 	}
-	return mux
+	return withRequestID(mux)
 }
 
 func healthzHandler(w stdhttp.ResponseWriter, r *stdhttp.Request) {

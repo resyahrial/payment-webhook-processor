@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"payment-webhook-processor/internal/logging"
 	"payment-webhook-processor/internal/service"
 	"payment-webhook-processor/internal/webhook"
 )
@@ -23,7 +25,7 @@ func TestWebhookHandlerServesValidSignedWebhook(t *testing.T) {
 	secret := "top-secret"
 	body := `{"provider_event_id":"evt_901","payment_id":"pay_901","event_type":"payment.paid","event_timestamp":"2026-06-18T10:30:00Z"}`
 	processor := &stubWebhookProcessor{result: service.Result{Status: service.ResultStatusProcessed}}
-	handler := NewWebhookHandler(secret, processor)
+	handler := NewWebhookHandler(secret, processor, nil)
 
 	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(body))
 	req.Header.Set(webhook.SignatureHeader, signWebhookPayload([]byte(body), secret))
@@ -55,7 +57,7 @@ func TestWebhookHandlerRejectsMissingSignature(t *testing.T) {
 	t.Parallel()
 
 	processor := &stubWebhookProcessor{}
-	handler := NewWebhookHandler("top-secret", processor)
+	handler := NewWebhookHandler("top-secret", processor, nil)
 
 	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(`{"provider_event_id":"evt_902","payment_id":"pay_902","event_type":"payment.pending","event_timestamp":"2026-06-18T10:30:00Z"}`))
 	recorder := httptest.NewRecorder()
@@ -76,7 +78,7 @@ func TestWebhookHandlerRejectsInvalidSignature(t *testing.T) {
 	t.Parallel()
 
 	processor := &stubWebhookProcessor{}
-	handler := NewWebhookHandler("top-secret", processor)
+	handler := NewWebhookHandler("top-secret", processor, nil)
 
 	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(`{"provider_event_id":"evt_903","payment_id":"pay_903","event_type":"payment.pending","event_timestamp":"2026-06-18T10:30:00Z"}`))
 	req.Header.Set(webhook.SignatureHeader, "not-a-valid-signature")
@@ -99,7 +101,7 @@ func TestWebhookHandlerRejectsMalformedJSON(t *testing.T) {
 
 	secret := "top-secret"
 	processor := &stubWebhookProcessor{}
-	handler := NewWebhookHandler(secret, processor)
+	handler := NewWebhookHandler(secret, processor, nil)
 	body := `{"provider_event_id":"evt_904"`
 
 	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(body))
@@ -123,7 +125,7 @@ func TestWebhookHandlerRejectsUnknownEventType(t *testing.T) {
 
 	secret := "top-secret"
 	processor := &stubWebhookProcessor{}
-	handler := NewWebhookHandler(secret, processor)
+	handler := NewWebhookHandler(secret, processor, nil)
 	body := `{"provider_event_id":"evt_905","payment_id":"pay_905","event_type":"payment.refunded","event_timestamp":"2026-06-18T10:30:00Z"}`
 
 	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(body))
@@ -148,7 +150,7 @@ func TestWebhookHandlerReturnsSuccessForDuplicateEvent(t *testing.T) {
 	secret := "top-secret"
 	body := `{"provider_event_id":"evt_906","payment_id":"pay_906","event_type":"payment.failed","event_timestamp":"2026-06-18T10:30:00Z"}`
 	processor := &stubWebhookProcessor{result: service.Result{Status: service.ResultStatusDuplicate}}
-	handler := NewWebhookHandler(secret, processor)
+	handler := NewWebhookHandler(secret, processor, nil)
 
 	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(body))
 	req.Header.Set(webhook.SignatureHeader, signWebhookPayload([]byte(body), secret))
@@ -172,7 +174,7 @@ func TestWebhookHandlerReturnsInternalServerErrorOnProcessorFailure(t *testing.T
 	secret := "top-secret"
 	body := `{"provider_event_id":"evt_907","payment_id":"pay_907","event_type":"payment.pending","event_timestamp":"2026-06-18T10:30:00Z"}`
 	processor := &stubWebhookProcessor{err: errors.New("database unavailable")}
-	handler := NewWebhookHandler(secret, processor)
+	handler := NewWebhookHandler(secret, processor, nil)
 
 	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(body))
 	req.Header.Set(webhook.SignatureHeader, signWebhookPayload([]byte(body), secret))
@@ -189,7 +191,7 @@ func TestWebhookHandlerReturnsInternalServerErrorOnProcessorFailure(t *testing.T
 func TestWebhookHandlerRejectsNonPostRequests(t *testing.T) {
 	t.Parallel()
 
-	handler := NewWebhookHandler("top-secret", &stubWebhookProcessor{})
+	handler := NewWebhookHandler("top-secret", &stubWebhookProcessor{}, nil)
 	req := httptest.NewRequest(stdhttp.MethodGet, "/webhooks/payment", nil)
 	recorder := httptest.NewRecorder()
 
@@ -198,6 +200,95 @@ func TestWebhookHandlerRejectsNonPostRequests(t *testing.T) {
 	if recorder.Code != stdhttp.StatusMethodNotAllowed {
 		t.Fatalf("expected status 405, got %d", recorder.Code)
 	}
+}
+
+func TestWebhookHandlerLogsCompletionForValidWebhook(t *testing.T) {
+	t.Parallel()
+
+	secret := "top-secret"
+	body := `{"provider_event_id":"evt_log_901","payment_id":"pay_log_901","event_type":"payment.paid","event_timestamp":"2026-06-18T10:30:00Z"}`
+	processor := &stubWebhookProcessor{result: service.Result{Status: service.ResultStatusProcessed}}
+	logs := &bytes.Buffer{}
+	handler := NewRouter(NewWebhookHandler(secret, processor, logging.NewJSONLogger(logs)))
+
+	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(body))
+	req.Header.Set(webhook.SignatureHeader, signWebhookPayload([]byte(body), secret))
+	req.Header.Set(requestIDHeader, "req_valid_901")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	entry := decodeSingleLogEntry(t, logs)
+	assertLogField(t, entry, "request_id", "req_valid_901")
+	assertLogField(t, entry, "provider_event_id", "evt_log_901")
+	assertLogField(t, entry, "payment_id", "pay_log_901")
+	assertLogField(t, entry, "event_type", "payment.paid")
+	assertLogField(t, entry, "payment_status", "paid")
+	assertLogField(t, entry, "processing_result", "processed")
+	assertNumericLogField(t, entry, "latency_ms")
+}
+
+func TestWebhookHandlerLogsCompletionForDuplicateWebhook(t *testing.T) {
+	t.Parallel()
+
+	secret := "top-secret"
+	body := `{"provider_event_id":"evt_log_902","payment_id":"pay_log_902","event_type":"payment.failed","event_timestamp":"2026-06-18T10:30:00Z"}`
+	processor := &stubWebhookProcessor{result: service.Result{Status: service.ResultStatusDuplicate}}
+	logs := &bytes.Buffer{}
+	handler := NewRouter(NewWebhookHandler(secret, processor, logging.NewJSONLogger(logs)))
+
+	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(body))
+	req.Header.Set(webhook.SignatureHeader, signWebhookPayload([]byte(body), secret))
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	entry := decodeSingleLogEntry(t, logs)
+	assertLogField(t, entry, "processing_result", "duplicate")
+	assertStringLogFieldPresent(t, entry, "request_id")
+}
+
+func TestWebhookHandlerLogsInvalidSignatureSafely(t *testing.T) {
+	t.Parallel()
+
+	secret := "top-secret"
+	signature := "not-a-valid-signature"
+	body := `{"provider_event_id":"evt_log_903","payment_id":"pay_log_903","event_type":"payment.pending","event_timestamp":"2026-06-18T10:30:00Z"}`
+	logs := &bytes.Buffer{}
+	handler := NewRouter(NewWebhookHandler(secret, &stubWebhookProcessor{}, logging.NewJSONLogger(logs)))
+
+	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(body))
+	req.Header.Set(webhook.SignatureHeader, signature)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	entry := decodeSingleLogEntry(t, logs)
+	assertLogField(t, entry, "provider_event_id", "evt_log_903")
+	assertLogField(t, entry, "payment_id", "pay_log_903")
+	assertLogField(t, entry, "event_type", "payment.pending")
+	assertLogField(t, entry, "error_type", "invalid_signature")
+	assertLogDoesNotContain(t, logs.String(), secret)
+	assertLogDoesNotContain(t, logs.String(), signature)
+}
+
+func TestWebhookHandlerLogsInvalidPayloadSafely(t *testing.T) {
+	t.Parallel()
+
+	secret := "top-secret"
+	body := `{"provider_event_id":"evt_log_904"`
+	logs := &bytes.Buffer{}
+	handler := NewRouter(NewWebhookHandler(secret, &stubWebhookProcessor{}, logging.NewJSONLogger(logs)))
+
+	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(body))
+	req.Header.Set(webhook.SignatureHeader, signWebhookPayload([]byte(body), secret))
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	entry := decodeSingleLogEntry(t, logs)
+	assertLogField(t, entry, "error_type", "invalid_payload")
+	assertLogDoesNotContain(t, logs.String(), secret)
 }
 
 type stubWebhookProcessor struct {
@@ -229,5 +320,65 @@ func assertWebhookResponseStatus(t *testing.T, body []byte, expectedStatus strin
 
 	if payload["status"] != expectedStatus {
 		t.Fatalf("expected response status %q, got %q", expectedStatus, payload["status"])
+	}
+}
+
+func decodeSingleLogEntry(t *testing.T, logs *bytes.Buffer) map[string]any {
+	t.Helper()
+
+	decoder := json.NewDecoder(logs)
+	var entry map[string]any
+	if err := decoder.Decode(&entry); err != nil {
+		t.Fatalf("expected a single json log entry, got error %v with content %q", err, logs.String())
+	}
+
+	var extra map[string]any
+	if err := decoder.Decode(&extra); err == nil {
+		t.Fatalf("expected exactly one log entry, got additional entry %v", extra)
+	}
+
+	return entry
+}
+
+func assertLogField(t *testing.T, entry map[string]any, key, expected string) {
+	t.Helper()
+
+	actual, ok := entry[key].(string)
+	if !ok {
+		t.Fatalf("expected %s to be a string, got %T (%v)", key, entry[key], entry[key])
+	}
+
+	if actual != expected {
+		t.Fatalf("expected %s %q, got %q", key, expected, actual)
+	}
+}
+
+func assertStringLogFieldPresent(t *testing.T, entry map[string]any, key string) {
+	t.Helper()
+
+	actual, ok := entry[key].(string)
+	if !ok || actual == "" {
+		t.Fatalf("expected non-empty string field %s, got %T (%v)", key, entry[key], entry[key])
+	}
+}
+
+func assertNumericLogField(t *testing.T, entry map[string]any, key string) {
+	t.Helper()
+
+	actual, ok := entry[key].(float64)
+	if !ok {
+		t.Fatalf("expected %s to be numeric, got %T (%v)", key, entry[key], entry[key])
+	}
+
+	if actual < 0 {
+		t.Fatalf("expected %s to be non-negative, got %v", key, actual)
+	}
+}
+
+func assertLogDoesNotContain(t *testing.T, content, unexpected string) {
+	t.Helper()
+
+	if strings.Contains(content, unexpected) {
+		t.Fatalf("expected log output not to contain %q, got %q", unexpected, content)
 	}
 }
