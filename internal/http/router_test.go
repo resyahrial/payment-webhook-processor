@@ -51,3 +51,40 @@ func TestNewRouterServesWebhookRoute(t *testing.T) {
 		t.Fatalf("expected status 204, got %d", recorder.Code)
 	}
 }
+
+func TestNewRouterPropagatesRequestIDHeader(t *testing.T) {
+	t.Parallel()
+
+	var gotRequestID string
+	router := NewRouter(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		gotRequestID = RequestIDFromContext(r.Context())
+		w.WriteHeader(stdhttp.StatusNoContent)
+	}))
+	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", nil)
+	req.Header.Set(requestIDHeader, "req_123")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	if gotRequestID != "req_123" {
+		t.Fatalf("expected propagated request id, got %q", gotRequestID)
+	}
+}
+
+func TestNewRouterGeneratesRequestIDWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	var gotRequestID string
+	router := NewRouter(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		gotRequestID = RequestIDFromContext(r.Context())
+		w.WriteHeader(stdhttp.StatusNoContent)
+	}))
+	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	if gotRequestID == "" {
+		t.Fatal("expected generated request id")
+	}
+}
