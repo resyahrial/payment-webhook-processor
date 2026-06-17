@@ -23,7 +23,7 @@ func TestWebhookEventRepositoryInsertStoresValidEvent(t *testing.T) {
 	testDB, cleanup := newRepositoryTestDatabase(t, ctx)
 	defer cleanup()
 
-	repo := NewWebhookEventRepository(testDB)
+	repo := NewWebhookEventRepository(testDB, nil)
 	event := webhook.PaymentEvent{
 		ProviderEventID: "evt_201",
 		PaymentID:       "pay_201",
@@ -52,7 +52,7 @@ func TestWebhookEventRepositoryInsertRejectsDuplicateProviderEventID(t *testing.
 	testDB, cleanup := newRepositoryTestDatabase(t, ctx)
 	defer cleanup()
 
-	repo := NewWebhookEventRepository(testDB)
+	repo := NewWebhookEventRepository(testDB, nil)
 	event := webhook.PaymentEvent{
 		ProviderEventID: "evt_202",
 		PaymentID:       "pay_202",
@@ -78,7 +78,7 @@ func TestWebhookEventRepositoryInsertAllowsSamePaymentIDWithDifferentProviderEve
 	testDB, cleanup := newRepositoryTestDatabase(t, ctx)
 	defer cleanup()
 
-	repo := NewWebhookEventRepository(testDB)
+	repo := NewWebhookEventRepository(testDB, nil)
 	firstTimestamp := time.Date(2026, time.June, 17, 11, 30, 0, 0, time.UTC)
 	firstEvent := webhook.PaymentEvent{
 		ProviderEventID: "evt_202_a",
@@ -129,7 +129,7 @@ func TestWebhookEventRepositoryInsertSupportsAllEventTypes(t *testing.T) {
 			testDB, cleanup := newRepositoryTestDatabase(t, ctx)
 			defer cleanup()
 
-			repo := NewWebhookEventRepository(testDB)
+			repo := NewWebhookEventRepository(testDB, nil)
 			eventTimestamp := time.Date(2026, time.June, 17, 12+index, 30, 0, 0, time.UTC)
 			event := webhook.PaymentEvent{
 				ProviderEventID: fmt.Sprintf("evt_30%d", index),
@@ -160,7 +160,7 @@ func TestWebhookEventRepositoryInsertReturnsDatabaseErrors(t *testing.T) {
 	testDB, cleanup := newRepositoryTestDatabase(t, ctx)
 	defer cleanup()
 
-	repo := NewWebhookEventRepository(testDB)
+	repo := NewWebhookEventRepository(testDB, nil)
 	event := webhook.PaymentEvent{
 		ProviderEventID: "evt_203",
 		PaymentID:       "pay_203",

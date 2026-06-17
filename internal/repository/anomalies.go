@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"payment-webhook-processor/internal/metrics"
 	"payment-webhook-processor/internal/webhook"
 )
 
@@ -34,14 +35,20 @@ type Anomaly struct {
 }
 
 type AnomalyRepository struct {
-	db *sql.DB
+	db      *sql.DB
+	metrics *metrics.Metrics
 }
 
-func NewAnomalyRepository(db *sql.DB) *AnomalyRepository {
-	return &AnomalyRepository{db: db}
+func NewAnomalyRepository(db *sql.DB, repositoryMetrics *metrics.Metrics) *AnomalyRepository {
+	return &AnomalyRepository{db: db, metrics: repositoryMetrics}
 }
 
 func (r *AnomalyRepository) Record(ctx context.Context, anomaly Anomaly) error {
+	startedAt := time.Now()
+	defer func() {
+		r.metrics.ObserveDatabaseWriteDuration("insert_anomaly", time.Since(startedAt))
+	}()
+
 	detailsJSON, err := json.Marshal(anomaly.Details)
 	if err != nil {
 		return fmt.Errorf("marshal anomaly details: %w", err)

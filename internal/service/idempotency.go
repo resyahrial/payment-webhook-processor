@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"payment-webhook-processor/internal/metrics"
 	"payment-webhook-processor/internal/repository"
 	"payment-webhook-processor/internal/webhook"
 )
@@ -34,12 +35,14 @@ type Result struct {
 type IdempotencyService struct {
 	repository    WebhookEventRepository
 	updatePayment PaymentUpdater
+	metrics       *metrics.Metrics
 }
 
-func NewIdempotencyService(repository WebhookEventRepository, updatePayment PaymentUpdater) *IdempotencyService {
+func NewIdempotencyService(repository WebhookEventRepository, updatePayment PaymentUpdater, serviceMetrics *metrics.Metrics) *IdempotencyService {
 	return &IdempotencyService{
 		repository:    repository,
 		updatePayment: updatePayment,
+		metrics:       serviceMetrics,
 	}
 }
 
@@ -47,6 +50,7 @@ func (s *IdempotencyService) Process(ctx context.Context, event webhook.PaymentE
 	webhookEventID, err := s.repository.Insert(ctx, event)
 	if err != nil {
 		if errors.Is(err, repository.ErrDuplicateProviderEventID) {
+			s.metrics.IncWebhookDuplicate(string(event.EventType))
 			return Result{Status: ResultStatusDuplicate}, nil
 		}
 

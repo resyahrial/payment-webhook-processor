@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
+
+	appmetrics "payment-webhook-processor/internal/metrics"
 	"payment-webhook-processor/internal/repository"
 	"payment-webhook-processor/internal/webhook"
 )
@@ -18,7 +21,7 @@ func TestIdempotencyServiceProcessStoresNewEventAndUpdatesPaymentState(t *testin
 	repo := &stubWebhookEventRepository{}
 	updater := &stubPaymentUpdater{}
 
-	svc := NewIdempotencyService(repo, updater.Update)
+	svc := NewIdempotencyService(repo, updater.Update, nil)
 	result, err := svc.Process(ctx, event)
 	if err != nil {
 		t.Fatalf("process event: %v", err)
@@ -53,7 +56,8 @@ func TestIdempotencyServiceProcessTreatsDuplicateEventAsSuccessfulNoOp(t *testin
 	repo := &stubWebhookEventRepository{insertErr: repository.ErrDuplicateProviderEventID}
 	updater := &stubPaymentUpdater{}
 
-	svc := NewIdempotencyService(repo, updater.Update)
+	serviceMetrics := appmetrics.New()
+	svc := NewIdempotencyService(repo, updater.Update, serviceMetrics)
 	result, err := svc.Process(ctx, event)
 	if err != nil {
 		t.Fatalf("process duplicate event: %v", err)
@@ -66,6 +70,11 @@ func TestIdempotencyServiceProcessTreatsDuplicateEventAsSuccessfulNoOp(t *testin
 	if updater.calls != 0 {
 		t.Fatalf("expected duplicate event to skip payment update, got %d calls", updater.calls)
 	}
+
+	metric := findServiceMetric(t, serviceMetrics, "payment_webhook_duplicates_total", map[string]string{"event_type": string(event.EventType)})
+	if got := metric.GetCounter().GetValue(); got != 1 {
+		t.Fatalf("expected duplicate metric count 1, got %v", got)
+	}
 }
 
 func TestIdempotencyServiceProcessDoesNotTreatDifferentProviderEventIDAsDuplicate(t *testing.T) {
@@ -74,7 +83,7 @@ func TestIdempotencyServiceProcessDoesNotTreatDifferentProviderEventIDAsDuplicat
 	ctx := context.Background()
 	repo := &stubWebhookEventRepository{insertedID: 502}
 	updater := &stubPaymentUpdater{}
-	svc := NewIdempotencyService(repo, updater.Update)
+	svc := NewIdempotencyService(repo, updater.Update, nil)
 
 	firstEvent := testPaymentEvent("evt_303_a", "pay_303", webhook.EventTypePaymentPending)
 	secondEvent := testPaymentEvent("evt_303_b", "pay_303", webhook.EventTypePaymentPaid)
@@ -111,7 +120,7 @@ func TestIdempotencyServiceProcessReturnsRepositoryErrors(t *testing.T) {
 	repo := &stubWebhookEventRepository{insertErr: repoErr}
 	updater := &stubPaymentUpdater{}
 
-	svc := NewIdempotencyService(repo, updater.Update)
+	svc := NewIdempotencyService(repo, updater.Update, nil)
 	_, err := svc.Process(ctx, event)
 	if !errors.Is(err, repoErr) {
 		t.Fatalf("expected repository error %v, got %v", repoErr, err)
@@ -131,7 +140,7 @@ func TestIdempotencyServiceProcessReturnsPaymentUpdateErrors(t *testing.T) {
 	repo := &stubWebhookEventRepository{insertedID: 503}
 	updater := &stubPaymentUpdater{err: updateErr}
 
-	svc := NewIdempotencyService(repo, updater.Update)
+	svc := NewIdempotencyService(repo, updater.Update, nil)
 	_, err := svc.Process(ctx, event)
 	if !errors.Is(err, updateErr) {
 		t.Fatalf("expected payment update error %v, got %v", updateErr, err)
@@ -184,4 +193,46 @@ func testPaymentEvent(providerEventID, paymentID string, eventType webhook.Event
 		EventTimestamp:  time.Date(2026, time.June, 17, 15, 30, 0, 0, time.UTC),
 		RawPayload:      []byte(`{"provider_event_id":"` + providerEventID + `","payment_id":"` + paymentID + `"}`),
 	}
+}
+
+func findServiceMetric(t *testing.T, serviceMetrics *appmetrics.Metrics, metricName string, expectedLabels map[string]string) *dto.Metric {
+	t.Helper()
+
+	metricFamilies, err := serviceMetrics.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+
+	for _, metricFamily := range metricFamilies {
+		if metricFamily.GetName() != metricName {
+			continue
+		}
+
+		for _, metric := range metricFamily.GetMetric() {
+			if serviceLabelsMatch(metric.GetLabel(), expectedLabels) {
+				return metric
+			}
+		}
+	}
+
+	t.Fatalf("metric %s with labels %v not found", metricName, expectedLabels)
+	return nil
+}
+
+func serviceLabelsMatch(metricLabels []*dto.LabelPair, expectedLabels map[string]string) bool {
+	if len(expectedLabels) == 0 {
+		return len(metricLabels) == 0
+	}
+
+	if len(metricLabels) != len(expectedLabels) {
+		return false
+	}
+
+	for _, label := range metricLabels {
+		if expectedLabels[label.GetName()] != label.GetValue() {
+			return false
+		}
+	}
+
+	return true
 }
