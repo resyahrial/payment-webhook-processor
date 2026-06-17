@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	stdhttp "net/http"
-	"time"
 
 	"github.com/rs/zerolog"
 
@@ -39,13 +38,13 @@ func NewWebhookHandler(signingSecret string, processor webhookProcessor, logger 
 }
 
 func (h *WebhookHandler) ServeHTTP(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-	startedAt := time.Now()
 	logFields := webhookLogFields{RequestID: RequestIDFromContext(r.Context())}
 	resultLabel := "method_not_allowed"
+	timer := h.metrics.StartWebhookResponseTimer(&resultLabel)
 	h.metrics.IncWebhookRequest()
 	defer func() {
-		h.metrics.ObserveWebhookResponseDuration(resultLabel, time.Since(startedAt))
-		event := h.logger.Info().Int64("latency_ms", time.Since(startedAt).Milliseconds())
+		duration := timer.Observe()
+		event := logging.WithTraceContext(r.Context(), h.logger.Info()).Int64("latency_ms", duration.Milliseconds())
 		logFields.apply(event)
 		event.Msg("webhook request completed")
 	}()

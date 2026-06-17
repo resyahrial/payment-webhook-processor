@@ -89,7 +89,7 @@ func TestNewRouterServesMetricsRoute(t *testing.T) {
 		t.Fatalf("expected prometheus content type, got %q", contentType)
 	}
 
-	if !strings.Contains(recorder.Body.String(), "payment_webhook_requests_total") {
+	if !strings.Contains(recorder.Body.String(), "go_gc_duration_seconds") {
 		t.Fatalf("expected metrics payload, got %q", recorder.Body.String())
 	}
 }

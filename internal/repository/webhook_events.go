@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -27,10 +26,7 @@ func NewWebhookEventRepository(db *sql.DB, repositoryMetrics *metrics.Metrics) *
 }
 
 func (r *WebhookEventRepository) Insert(ctx context.Context, event webhook.PaymentEvent) (int64, error) {
-	startedAt := time.Now()
-	defer func() {
-		r.metrics.ObserveDatabaseWriteDuration("insert_webhook_event", time.Since(startedAt))
-	}()
+	defer r.metrics.StartDatabaseWriteTimer("insert_webhook_event").Observe()
 
 	var id int64
 	err := r.db.QueryRowContext(ctx, `

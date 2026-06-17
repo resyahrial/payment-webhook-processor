@@ -44,10 +44,7 @@ func NewAnomalyRepository(db *sql.DB, repositoryMetrics *metrics.Metrics) *Anoma
 }
 
 func (r *AnomalyRepository) Record(ctx context.Context, anomaly Anomaly) error {
-	startedAt := time.Now()
-	defer func() {
-		r.metrics.ObserveDatabaseWriteDuration("insert_anomaly", time.Since(startedAt))
-	}()
+	defer r.metrics.StartDatabaseWriteTimer("insert_anomaly").Observe()
 
 	detailsJSON, err := json.Marshal(anomaly.Details)
 	if err != nil {

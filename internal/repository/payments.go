@@ -48,10 +48,7 @@ func (r *PaymentRepository) GetByPaymentID(ctx context.Context, paymentID string
 }
 
 func (r *PaymentRepository) Upsert(ctx context.Context, payment Payment) error {
-	startedAt := time.Now()
-	defer func() {
-		r.metrics.ObserveDatabaseWriteDuration("upsert_payment", time.Since(startedAt))
-	}()
+	defer r.metrics.StartDatabaseWriteTimer("upsert_payment").Observe()
 
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO payments (payment_id, status, status_timestamp)
