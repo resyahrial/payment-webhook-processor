@@ -8,7 +8,7 @@ import (
 )
 
 func TestNewRouterServesHealthz(t *testing.T) {
-	router := NewRouter()
+	router := NewRouter(nil)
 	req := httptest.NewRequest(stdhttp.MethodGet, "/healthz", nil)
 	recorder := httptest.NewRecorder()
 
@@ -29,5 +29,25 @@ func TestNewRouterServesHealthz(t *testing.T) {
 
 	if payload["status"] != "ok" {
 		t.Fatalf("expected status payload ok, got %q", payload["status"])
+	}
+}
+
+func TestNewRouterServesWebhookRoute(t *testing.T) {
+	handlerCalled := false
+	router := NewRouter(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		handlerCalled = true
+		w.WriteHeader(stdhttp.StatusNoContent)
+	}))
+	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	if !handlerCalled {
+		t.Fatal("expected webhook handler to be called")
+	}
+
+	if recorder.Code != stdhttp.StatusNoContent {
+		t.Fatalf("expected status 204, got %d", recorder.Code)
 	}
 }

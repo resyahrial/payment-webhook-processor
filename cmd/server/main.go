@@ -13,6 +13,8 @@ import (
 	"payment-webhook-processor/internal/config"
 	"payment-webhook-processor/internal/db"
 	apphttp "payment-webhook-processor/internal/http"
+	"payment-webhook-processor/internal/repository"
+	"payment-webhook-processor/internal/service"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -39,9 +41,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	webhookEventRepository := repository.NewWebhookEventRepository(database)
+	paymentRepository := repository.NewPaymentRepository(database)
+	anomalyRepository := repository.NewAnomalyRepository(database)
+	paymentProcessor := service.NewPaymentProcessor(paymentRepository, anomalyRepository)
+	webhookProcessor := service.NewIdempotencyService(webhookEventRepository, paymentProcessor.Update)
+	webhookHandler := apphttp.NewWebhookHandler(cfg.WebhookSigningSecret, webhookProcessor)
+
 	server := &stdhttp.Server{
 		Addr:    ":" + cfg.Port,
-		Handler: apphttp.NewRouter(),
+		Handler: apphttp.NewRouter(webhookHandler),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

@@ -9,9 +9,12 @@ type healthResponse struct {
 	Status string `json:"status"`
 }
 
-func NewRouter() stdhttp.Handler {
+func NewRouter(webhookHandler stdhttp.Handler) stdhttp.Handler {
 	mux := stdhttp.NewServeMux()
 	mux.HandleFunc("/healthz", healthzHandler)
+	if webhookHandler != nil {
+		mux.Handle("/webhooks/payment", webhookHandler)
+	}
 	return mux
 }
 
