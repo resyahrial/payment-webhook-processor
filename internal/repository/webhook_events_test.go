@@ -66,6 +66,42 @@ func TestWebhookEventRepositoryInsertRejectsDuplicateProviderEventID(t *testing.
 	}
 }
 
+func TestWebhookEventRepositoryInsertAllowsSamePaymentIDWithDifferentProviderEventIDs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	testDB, cleanup := newRepositoryTestDatabase(t, ctx)
+	defer cleanup()
+
+	repo := NewWebhookEventRepository(testDB)
+	firstTimestamp := time.Date(2026, time.June, 17, 11, 30, 0, 0, time.UTC)
+	firstEvent := webhook.PaymentEvent{
+		ProviderEventID: "evt_202_a",
+		PaymentID:       "pay_202",
+		EventType:       webhook.EventTypePaymentPending,
+		EventTimestamp:  firstTimestamp,
+		RawPayload:      []byte(`{"provider_event_id":"evt_202_a","payment_id":"pay_202","event_type":"payment.pending","event_timestamp":"2026-06-17T11:30:00Z"}`),
+	}
+	secondEvent := webhook.PaymentEvent{
+		ProviderEventID: "evt_202_b",
+		PaymentID:       "pay_202",
+		EventType:       webhook.EventTypePaymentPaid,
+		EventTimestamp:  firstTimestamp.Add(5 * time.Minute),
+		RawPayload:      []byte(`{"provider_event_id":"evt_202_b","payment_id":"pay_202","event_type":"payment.paid","event_timestamp":"2026-06-17T11:35:00Z"}`),
+	}
+
+	if err := repo.Insert(ctx, firstEvent); err != nil {
+		t.Fatalf("insert first event: %v", err)
+	}
+
+	if err := repo.Insert(ctx, secondEvent); err != nil {
+		t.Fatalf("insert second event: %v", err)
+	}
+
+	assertStoredEvent(t, ctx, testDB, firstEvent)
+	assertStoredEvent(t, ctx, testDB, secondEvent)
+}
+
 func TestWebhookEventRepositoryInsertSupportsAllEventTypes(t *testing.T) {
 	t.Parallel()
 
