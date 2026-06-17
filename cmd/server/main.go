@@ -13,6 +13,7 @@ import (
 	"payment-webhook-processor/internal/db"
 	apphttp "payment-webhook-processor/internal/http"
 	"payment-webhook-processor/internal/logging"
+	"payment-webhook-processor/internal/metrics"
 	"payment-webhook-processor/internal/repository"
 	"payment-webhook-processor/internal/service"
 )
@@ -42,16 +43,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	webhookEventRepository := repository.NewWebhookEventRepository(database)
-	paymentRepository := repository.NewPaymentRepository(database)
-	anomalyRepository := repository.NewAnomalyRepository(database)
-	paymentProcessor := service.NewPaymentProcessor(paymentRepository, anomalyRepository)
-	webhookProcessor := service.NewIdempotencyService(webhookEventRepository, paymentProcessor.Update)
-	webhookHandler := apphttp.NewWebhookHandler(cfg.WebhookSigningSecret, webhookProcessor, logger)
+	appMetrics := metrics.New()
+	webhookEventRepository := repository.NewWebhookEventRepository(database, appMetrics)
+	paymentRepository := repository.NewPaymentRepository(database, appMetrics)
+	anomalyRepository := repository.NewAnomalyRepository(database, appMetrics)
+	paymentProcessor := service.NewPaymentProcessor(paymentRepository, anomalyRepository, appMetrics)
+	webhookProcessor := service.NewIdempotencyService(webhookEventRepository, paymentProcessor.Update, appMetrics)
+	webhookHandler := apphttp.NewWebhookHandler(cfg.WebhookSigningSecret, webhookProcessor, logger, appMetrics)
 
 	server := &stdhttp.Server{
 		Addr:    ":" + cfg.Port,
-		Handler: apphttp.NewRouter(webhookHandler),
+		Handler: apphttp.NewRouter(webhookHandler, appMetrics.Handler()),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

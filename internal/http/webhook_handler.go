@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"payment-webhook-processor/internal/logging"
+	"payment-webhook-processor/internal/metrics"
 	"payment-webhook-processor/internal/service"
 	"payment-webhook-processor/internal/webhook"
 )
@@ -22,24 +23,28 @@ type WebhookHandler struct {
 	signingSecret string
 	processor     webhookProcessor
 	logger        *zerolog.Logger
+	metrics       *metrics.Metrics
 }
 
 type webhookResponse struct {
 	Status string `json:"status"`
 }
 
-func NewWebhookHandler(signingSecret string, processor webhookProcessor, logger *zerolog.Logger) stdhttp.Handler {
+func NewWebhookHandler(signingSecret string, processor webhookProcessor, logger *zerolog.Logger, handlerMetrics *metrics.Metrics) stdhttp.Handler {
 	if logger == nil {
 		logger = logging.NewJSONLogger(io.Discard)
 	}
 
-	return &WebhookHandler{signingSecret: signingSecret, processor: processor, logger: logger}
+	return &WebhookHandler{signingSecret: signingSecret, processor: processor, logger: logger, metrics: handlerMetrics}
 }
 
 func (h *WebhookHandler) ServeHTTP(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	startedAt := time.Now()
 	logFields := webhookLogFields{RequestID: RequestIDFromContext(r.Context())}
+	resultLabel := "method_not_allowed"
+	h.metrics.IncWebhookRequest()
 	defer func() {
+		h.metrics.ObserveWebhookResponseDuration(resultLabel, time.Since(startedAt))
 		event := h.logger.Info().Int64("latency_ms", time.Since(startedAt).Milliseconds())
 		logFields.apply(event)
 		event.Msg("webhook request completed")
@@ -47,6 +52,7 @@ func (h *WebhookHandler) ServeHTTP(w stdhttp.ResponseWriter, r *stdhttp.Request)
 
 	if r.Method != stdhttp.MethodPost {
 		logFields.ErrorType = "method_not_allowed"
+		h.metrics.IncWebhookError(resultLabel)
 		w.WriteHeader(stdhttp.StatusMethodNotAllowed)
 		return
 	}
@@ -54,6 +60,8 @@ func (h *WebhookHandler) ServeHTTP(w stdhttp.ResponseWriter, r *stdhttp.Request)
 	rawBody, err := io.ReadAll(r.Body)
 	if err != nil {
 		logFields.ErrorType = "body_read_error"
+		resultLabel = "invalid_payload"
+		h.metrics.IncWebhookError(resultLabel)
 		writeJSON(w, stdhttp.StatusBadRequest, webhookResponse{Status: "invalid_payload"})
 		return
 	}
@@ -62,6 +70,9 @@ func (h *WebhookHandler) ServeHTTP(w stdhttp.ResponseWriter, r *stdhttp.Request)
 
 	if err := webhook.ValidateSignature(rawBody, r.Header.Get(webhook.SignatureHeader), h.signingSecret); err != nil {
 		logFields.ErrorType = "invalid_signature"
+		resultLabel = "unauthorized"
+		h.metrics.IncSignatureFailure()
+		h.metrics.IncWebhookError(resultLabel)
 		writeJSON(w, stdhttp.StatusUnauthorized, webhookResponse{Status: "unauthorized"})
 		return
 	}
@@ -69,9 +80,12 @@ func (h *WebhookHandler) ServeHTTP(w stdhttp.ResponseWriter, r *stdhttp.Request)
 	event, err := webhook.ParseEvent(rawBody)
 	if err != nil {
 		logFields.ErrorType = "invalid_payload"
+		resultLabel = "invalid_payload"
+		h.metrics.IncWebhookError(resultLabel)
 		writeJSON(w, stdhttp.StatusBadRequest, webhookResponse{Status: "invalid_payload"})
 		return
 	}
+	h.metrics.IncProviderEvent(string(event.EventType), string(event.PaymentStatus))
 
 	logFields.ProviderEventID = event.ProviderEventID
 	logFields.PaymentID = event.PaymentID
@@ -81,6 +95,8 @@ func (h *WebhookHandler) ServeHTTP(w stdhttp.ResponseWriter, r *stdhttp.Request)
 	result, err := h.processor.Process(r.Context(), event)
 	if err != nil {
 		logFields.ErrorType = "processing_error"
+		resultLabel = "internal_error"
+		h.metrics.IncWebhookError(resultLabel)
 		writeJSON(w, stdhttp.StatusInternalServerError, webhookResponse{Status: "internal_error"})
 		return
 	}
@@ -90,6 +106,8 @@ func (h *WebhookHandler) ServeHTTP(w stdhttp.ResponseWriter, r *stdhttp.Request)
 		status = string(service.ResultStatusProcessed)
 	}
 	logFields.ProcessingResult = status
+	resultLabel = status
+	h.metrics.IncWebhookSuccess(resultLabel)
 
 	writeJSON(w, stdhttp.StatusOK, webhookResponse{Status: status})
 }

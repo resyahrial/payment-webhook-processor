@@ -17,7 +17,7 @@ func TestPaymentRepositoryGetByPaymentIDReturnsStoredPayment(t *testing.T) {
 	testDB, cleanup := newRepositoryTestDatabase(t, ctx)
 	defer cleanup()
 
-	repo := NewPaymentRepository(testDB)
+	repo := NewPaymentRepository(testDB, nil)
 	expected := Payment{
 		PaymentID:       "pay_401",
 		Status:          webhook.PaymentStatusPending,
@@ -41,7 +41,7 @@ func TestPaymentRepositoryGetByPaymentIDReturnsNotFound(t *testing.T) {
 	testDB, cleanup := newRepositoryTestDatabase(t, ctx)
 	defer cleanup()
 
-	repo := NewPaymentRepository(testDB)
+	repo := NewPaymentRepository(testDB, nil)
 
 	_, err := repo.GetByPaymentID(ctx, "pay_missing")
 	if !errors.Is(err, ErrPaymentNotFound) {
@@ -56,7 +56,7 @@ func TestPaymentRepositoryUpsertCreatesPaymentState(t *testing.T) {
 	testDB, cleanup := newRepositoryTestDatabase(t, ctx)
 	defer cleanup()
 
-	repo := NewPaymentRepository(testDB)
+	repo := NewPaymentRepository(testDB, nil)
 	expected := Payment{
 		PaymentID:       "pay_402",
 		Status:          webhook.PaymentStatusPending,
@@ -77,7 +77,7 @@ func TestPaymentRepositoryUpsertUpdatesExistingPaymentState(t *testing.T) {
 	testDB, cleanup := newRepositoryTestDatabase(t, ctx)
 	defer cleanup()
 
-	repo := NewPaymentRepository(testDB)
+	repo := NewPaymentRepository(testDB, nil)
 	initial := Payment{
 		PaymentID:       "pay_403",
 		Status:          webhook.PaymentStatusPending,

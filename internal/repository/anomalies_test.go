@@ -30,7 +30,7 @@ func TestAnomalyRepositoryRecordStoresAnomaly(t *testing.T) {
 		RawPayload:      []byte(`{"provider_event_id":"evt_601","payment_id":"pay_601","event_type":"payment.failed","event_timestamp":"2026-06-18T09:55:00Z"}`),
 	})
 
-	repo := NewAnomalyRepository(testDB)
+	repo := NewAnomalyRepository(testDB, nil)
 	expected := Anomaly{
 		WebhookEventID: webhookEventID,
 		PaymentID:      "pay_601",
@@ -71,7 +71,7 @@ func TestAnomalyRepositoryRecordAllowsMultipleAnomaliesForOneEvent(t *testing.T)
 		RawPayload:      []byte(`{"provider_event_id":"evt_602","payment_id":"pay_602","event_type":"payment.failed","event_timestamp":"2026-06-18T10:55:00Z"}`),
 	})
 
-	repo := NewAnomalyRepository(testDB)
+	repo := NewAnomalyRepository(testDB, nil)
 	first := Anomaly{
 		WebhookEventID: webhookEventID,
 		PaymentID:      "pay_602",

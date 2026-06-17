@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"payment-webhook-processor/internal/metrics"
 	"payment-webhook-processor/internal/webhook"
 )
 
@@ -19,11 +20,12 @@ type Payment struct {
 }
 
 type PaymentRepository struct {
-	db *sql.DB
+	db      *sql.DB
+	metrics *metrics.Metrics
 }
 
-func NewPaymentRepository(db *sql.DB) *PaymentRepository {
-	return &PaymentRepository{db: db}
+func NewPaymentRepository(db *sql.DB, repositoryMetrics *metrics.Metrics) *PaymentRepository {
+	return &PaymentRepository{db: db, metrics: repositoryMetrics}
 }
 
 func (r *PaymentRepository) GetByPaymentID(ctx context.Context, paymentID string) (Payment, error) {
@@ -46,6 +48,11 @@ func (r *PaymentRepository) GetByPaymentID(ctx context.Context, paymentID string
 }
 
 func (r *PaymentRepository) Upsert(ctx context.Context, payment Payment) error {
+	startedAt := time.Now()
+	defer func() {
+		r.metrics.ObserveDatabaseWriteDuration("upsert_payment", time.Since(startedAt))
+	}()
+
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO payments (payment_id, status, status_timestamp)
 		VALUES ($1, $2, $3)

@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"payment-webhook-processor/internal/metrics"
 	"payment-webhook-processor/internal/webhook"
 )
 
@@ -16,14 +18,20 @@ const ProcessingStatusPending = "pending"
 var ErrDuplicateProviderEventID = errors.New("duplicate provider event id")
 
 type WebhookEventRepository struct {
-	db *sql.DB
+	db      *sql.DB
+	metrics *metrics.Metrics
 }
 
-func NewWebhookEventRepository(db *sql.DB) *WebhookEventRepository {
-	return &WebhookEventRepository{db: db}
+func NewWebhookEventRepository(db *sql.DB, repositoryMetrics *metrics.Metrics) *WebhookEventRepository {
+	return &WebhookEventRepository{db: db, metrics: repositoryMetrics}
 }
 
 func (r *WebhookEventRepository) Insert(ctx context.Context, event webhook.PaymentEvent) (int64, error) {
+	startedAt := time.Now()
+	defer func() {
+		r.metrics.ObserveDatabaseWriteDuration("insert_webhook_event", time.Since(startedAt))
+	}()
+
 	var id int64
 	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO webhook_events (

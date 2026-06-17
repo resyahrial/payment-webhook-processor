@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	stdhttp "net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	appmetrics "payment-webhook-processor/internal/metrics"
 )
 
 func TestNewRouterServesHealthz(t *testing.T) {
-	router := NewRouter(nil)
+	router := NewRouter(nil, nil)
 	req := httptest.NewRequest(stdhttp.MethodGet, "/healthz", nil)
 	recorder := httptest.NewRecorder()
 
@@ -37,7 +40,7 @@ func TestNewRouterServesWebhookRoute(t *testing.T) {
 	router := NewRouter(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		handlerCalled = true
 		w.WriteHeader(stdhttp.StatusNoContent)
-	}))
+	}), nil)
 	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", nil)
 	recorder := httptest.NewRecorder()
 
@@ -59,7 +62,7 @@ func TestNewRouterPropagatesRequestIDHeader(t *testing.T) {
 	router := NewRouter(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		gotRequestID = RequestIDFromContext(r.Context())
 		w.WriteHeader(stdhttp.StatusNoContent)
-	}))
+	}), nil)
 	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", nil)
 	req.Header.Set(requestIDHeader, "req_123")
 	recorder := httptest.NewRecorder()
@@ -71,6 +74,26 @@ func TestNewRouterPropagatesRequestIDHeader(t *testing.T) {
 	}
 }
 
+func TestNewRouterServesMetricsRoute(t *testing.T) {
+	router := NewRouter(nil, appmetrics.New().Handler())
+	req := httptest.NewRequest(stdhttp.MethodGet, "/metrics", nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+
+	if contentType := recorder.Header().Get("Content-Type"); !strings.Contains(contentType, "text/plain") {
+		t.Fatalf("expected prometheus content type, got %q", contentType)
+	}
+
+	if !strings.Contains(recorder.Body.String(), "payment_webhook_requests_total") {
+		t.Fatalf("expected metrics payload, got %q", recorder.Body.String())
+	}
+}
+
 func TestNewRouterGeneratesRequestIDWhenMissing(t *testing.T) {
 	t.Parallel()
 
@@ -78,7 +101,7 @@ func TestNewRouterGeneratesRequestIDWhenMissing(t *testing.T) {
 	router := NewRouter(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		gotRequestID = RequestIDFromContext(r.Context())
 		w.WriteHeader(stdhttp.StatusNoContent)
-	}))
+	}), nil)
 	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", nil)
 	recorder := httptest.NewRecorder()
 

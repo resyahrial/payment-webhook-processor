@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
+
+	appmetrics "payment-webhook-processor/internal/metrics"
 	"payment-webhook-processor/internal/repository"
 	"payment-webhook-processor/internal/webhook"
 )
@@ -18,7 +21,8 @@ func TestPaymentProcessorProcessCreatesPaymentForFirstEvent(t *testing.T) {
 	repo := &stubPaymentStateRepository{getErr: repository.ErrPaymentNotFound}
 	anomalies := &stubAnomalyRecorder{}
 
-	processor := NewPaymentProcessor(repo, anomalies)
+	processorMetrics := appmetrics.New()
+	processor := NewPaymentProcessor(repo, anomalies, processorMetrics)
 	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 101})
 	if err != nil {
 		t.Fatalf("process event: %v", err)
@@ -41,6 +45,8 @@ func TestPaymentProcessorProcessCreatesPaymentForFirstEvent(t *testing.T) {
 		Status:          event.PaymentStatus,
 		StatusTimestamp: event.EventTimestamp,
 	})
+
+	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "created"}, 1)
 }
 
 func TestPaymentProcessorProcessUpdatesPaymentForNewerEvent(t *testing.T) {
@@ -56,7 +62,7 @@ func TestPaymentProcessorProcessUpdatesPaymentForNewerEvent(t *testing.T) {
 	repo := &stubPaymentStateRepository{payment: current}
 	anomalies := &stubAnomalyRecorder{}
 
-	processor := NewPaymentProcessor(repo, anomalies)
+	processor := NewPaymentProcessor(repo, anomalies, nil)
 	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 102})
 	if err != nil {
 		t.Fatalf("process event: %v", err)
@@ -94,7 +100,8 @@ func TestPaymentProcessorProcessIgnoresOlderEvent(t *testing.T) {
 	repo := &stubPaymentStateRepository{payment: current}
 	anomalies := &stubAnomalyRecorder{}
 
-	processor := NewPaymentProcessor(repo, anomalies)
+	processorMetrics := appmetrics.New()
+	processor := NewPaymentProcessor(repo, anomalies, processorMetrics)
 	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 103})
 	if err != nil {
 		t.Fatalf("process event: %v", err)
@@ -115,6 +122,9 @@ func TestPaymentProcessorProcessIgnoresOlderEvent(t *testing.T) {
 	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypeOlderEventTimestamp {
 		t.Fatalf("expected older timestamp anomaly, got %+v", anomalies.records)
 	}
+
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypeOlderEventTimestamp)}, 1)
+	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "ignored"}, 1)
 }
 
 func TestPaymentProcessorProcessIgnoresEqualTimestampEvent(t *testing.T) {
@@ -131,7 +141,7 @@ func TestPaymentProcessorProcessIgnoresEqualTimestampEvent(t *testing.T) {
 	repo := &stubPaymentStateRepository{payment: current}
 	anomalies := &stubAnomalyRecorder{}
 
-	processor := NewPaymentProcessor(repo, anomalies)
+	processor := NewPaymentProcessor(repo, anomalies, nil)
 	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 104})
 	if err != nil {
 		t.Fatalf("process event: %v", err)
@@ -157,7 +167,7 @@ func TestPaymentProcessorProcessHandlesMultipleValidStatusChanges(t *testing.T) 
 	initialTimestamp := time.Date(2026, time.June, 17, 13, 30, 0, 0, time.UTC)
 	repo := &stubPaymentStateRepository{getErr: repository.ErrPaymentNotFound}
 	anomalies := &stubAnomalyRecorder{}
-	processor := NewPaymentProcessor(repo, anomalies)
+	processor := NewPaymentProcessor(repo, anomalies, nil)
 
 	firstEvent := paymentProcessorEvent("evt_405_a", "pay_405", webhook.EventTypePaymentPending, initialTimestamp)
 	secondEvent := paymentProcessorEvent("evt_405_b", "pay_405", webhook.EventTypePaymentPaid, initialTimestamp.Add(5*time.Minute))
@@ -219,7 +229,8 @@ func TestPaymentProcessorProcessReturnsFailedResultOnRepositoryError(t *testing.
 	repo := &stubPaymentStateRepository{getErr: repoErr}
 	anomalies := &stubAnomalyRecorder{}
 
-	processor := NewPaymentProcessor(repo, anomalies)
+	processorMetrics := appmetrics.New()
+	processor := NewPaymentProcessor(repo, anomalies, processorMetrics)
 	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 108})
 	if !errors.Is(err, repoErr) {
 		t.Fatalf("expected repository error %v, got %v", repoErr, err)
@@ -236,6 +247,8 @@ func TestPaymentProcessorProcessReturnsFailedResultOnRepositoryError(t *testing.
 	if anomalies.calls != 0 {
 		t.Fatalf("expected repository failure to skip anomaly recording, got %d calls", anomalies.calls)
 	}
+
+	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "failed"}, 1)
 }
 
 func TestPaymentProcessorProcessRecordsSuspiciousTransitionWithoutChangingUpdateOutcome(t *testing.T) {
@@ -251,7 +264,8 @@ func TestPaymentProcessorProcessRecordsSuspiciousTransitionWithoutChangingUpdate
 	repo := &stubPaymentStateRepository{payment: current}
 	anomalies := &stubAnomalyRecorder{}
 
-	processor := NewPaymentProcessor(repo, anomalies)
+	processorMetrics := appmetrics.New()
+	processor := NewPaymentProcessor(repo, anomalies, processorMetrics)
 	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 109})
 	if err != nil {
 		t.Fatalf("process event: %v", err)
@@ -264,6 +278,9 @@ func TestPaymentProcessorProcessRecordsSuspiciousTransitionWithoutChangingUpdate
 	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypePaidAfterFailed {
 		t.Fatalf("expected paid-after-failed anomaly, got %+v", anomalies.records)
 	}
+
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypePaidAfterFailed)}, 1)
+	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "updated"}, 1)
 }
 
 func TestPaymentProcessorProcessContinuesWhenAnomalyRecordingFails(t *testing.T) {
@@ -279,7 +296,7 @@ func TestPaymentProcessorProcessContinuesWhenAnomalyRecordingFails(t *testing.T)
 	repo := &stubPaymentStateRepository{payment: current}
 	anomalies := &stubAnomalyRecorder{err: errors.New("anomaly insert failed")}
 
-	processor := NewPaymentProcessor(repo, anomalies)
+	processor := NewPaymentProcessor(repo, anomalies, nil)
 	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 110})
 	if err != nil {
 		t.Fatalf("expected anomaly failure to be swallowed, got %v", err)
@@ -371,4 +388,64 @@ func assertPaymentState(t *testing.T, actual, expected repository.Payment) {
 	if !actual.StatusTimestamp.Equal(expected.StatusTimestamp) {
 		t.Fatalf("expected payment timestamp %s, got %s", expected.StatusTimestamp, actual.StatusTimestamp)
 	}
+}
+
+func assertProcessorCounterValue(t *testing.T, processorMetrics *appmetrics.Metrics, metricName string, expectedLabels map[string]string, expectedValue float64) {
+	t.Helper()
+
+	metric := findProcessorMetric(t, processorMetrics, metricName, expectedLabels)
+	if got := metric.GetCounter().GetValue(); got != expectedValue {
+		t.Fatalf("expected counter %s with labels %v to be %v, got %v", metricName, expectedLabels, expectedValue, got)
+	}
+}
+
+func assertProcessorHistogramCount(t *testing.T, processorMetrics *appmetrics.Metrics, metricName string, expectedLabels map[string]string, expectedCount uint64) {
+	t.Helper()
+
+	metric := findProcessorMetric(t, processorMetrics, metricName, expectedLabels)
+	if got := metric.GetHistogram().GetSampleCount(); got != expectedCount {
+		t.Fatalf("expected histogram %s with labels %v count %d, got %d", metricName, expectedLabels, expectedCount, got)
+	}
+}
+
+func findProcessorMetric(t *testing.T, processorMetrics *appmetrics.Metrics, metricName string, expectedLabels map[string]string) *dto.Metric {
+	t.Helper()
+
+	metricFamilies, err := processorMetrics.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+
+	for _, metricFamily := range metricFamilies {
+		if metricFamily.GetName() != metricName {
+			continue
+		}
+
+		for _, metric := range metricFamily.GetMetric() {
+			if processorLabelsMatch(metric.GetLabel(), expectedLabels) {
+				return metric
+			}
+		}
+	}
+
+	t.Fatalf("metric %s with labels %v not found", metricName, expectedLabels)
+	return nil
+}
+
+func processorLabelsMatch(metricLabels []*dto.LabelPair, expectedLabels map[string]string) bool {
+	if len(expectedLabels) == 0 {
+		return len(metricLabels) == 0
+	}
+
+	if len(metricLabels) != len(expectedLabels) {
+		return false
+	}
+
+	for _, label := range metricLabels {
+		if expectedLabels[label.GetName()] != label.GetValue() {
+			return false
+		}
+	}
+
+	return true
 }
