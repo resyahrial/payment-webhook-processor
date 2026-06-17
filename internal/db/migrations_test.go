@@ -108,7 +108,7 @@ func TestRunMigrationsSupportsPaymentUpsertByPaymentID(t *testing.T) {
 		SET status = EXCLUDED.status,
 		    status_timestamp = EXCLUDED.status_timestamp,
 		    updated_at = NOW()
-	`, "payment-1", "captured", updatedTimestamp); err != nil {
+	`, "payment-1", "paid", updatedTimestamp); err != nil {
 		t.Fatalf("upsert payment state: %v", err)
 	}
 
@@ -122,8 +122,8 @@ func TestRunMigrationsSupportsPaymentUpsertByPaymentID(t *testing.T) {
 		t.Fatalf("query payment state: %v", err)
 	}
 
-	if status != "captured" {
-		t.Fatalf("expected upserted status captured, got %q", status)
+	if status != "paid" {
+		t.Fatalf("expected upserted status paid, got %q", status)
 	}
 
 	if !statusTimestamp.Equal(updatedTimestamp) {
