@@ -16,9 +16,10 @@ func TestPaymentProcessorProcessCreatesPaymentForFirstEvent(t *testing.T) {
 	ctx := context.Background()
 	event := paymentProcessorEvent("evt_401", "pay_401", webhook.EventTypePaymentPending, time.Date(2026, time.June, 17, 10, 30, 0, 0, time.UTC))
 	repo := &stubPaymentStateRepository{getErr: repository.ErrPaymentNotFound}
+	anomalies := &stubAnomalyRecorder{}
 
-	processor := NewPaymentProcessor(repo)
-	result, err := processor.Process(ctx, event)
+	processor := NewPaymentProcessor(repo, anomalies)
+	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 101})
 	if err != nil {
 		t.Fatalf("process event: %v", err)
 	}
@@ -29,6 +30,10 @@ func TestPaymentProcessorProcessCreatesPaymentForFirstEvent(t *testing.T) {
 
 	if repo.upsertCalls != 1 {
 		t.Fatalf("expected 1 upsert call, got %d", repo.upsertCalls)
+	}
+
+	if anomalies.calls != 0 {
+		t.Fatalf("expected first event to skip anomaly recording, got %d calls", anomalies.calls)
 	}
 
 	assertPaymentState(t, repo.lastUpserted, repository.Payment{
@@ -49,9 +54,10 @@ func TestPaymentProcessorProcessUpdatesPaymentForNewerEvent(t *testing.T) {
 	}
 	event := paymentProcessorEvent("evt_402", current.PaymentID, webhook.EventTypePaymentPaid, current.StatusTimestamp.Add(5*time.Minute))
 	repo := &stubPaymentStateRepository{payment: current}
+	anomalies := &stubAnomalyRecorder{}
 
-	processor := NewPaymentProcessor(repo)
-	result, err := processor.Process(ctx, event)
+	processor := NewPaymentProcessor(repo, anomalies)
+	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 102})
 	if err != nil {
 		t.Fatalf("process event: %v", err)
 	}
@@ -62,6 +68,10 @@ func TestPaymentProcessorProcessUpdatesPaymentForNewerEvent(t *testing.T) {
 
 	if repo.upsertCalls != 1 {
 		t.Fatalf("expected 1 upsert call, got %d", repo.upsertCalls)
+	}
+
+	if anomalies.calls != 0 {
+		t.Fatalf("expected normal update to skip anomaly recording, got %d calls", anomalies.calls)
 	}
 
 	assertPaymentState(t, repo.lastUpserted, repository.Payment{
@@ -82,9 +92,10 @@ func TestPaymentProcessorProcessIgnoresOlderEvent(t *testing.T) {
 	}
 	event := paymentProcessorEvent("evt_403", current.PaymentID, webhook.EventTypePaymentPending, current.StatusTimestamp.Add(-5*time.Minute))
 	repo := &stubPaymentStateRepository{payment: current}
+	anomalies := &stubAnomalyRecorder{}
 
-	processor := NewPaymentProcessor(repo)
-	result, err := processor.Process(ctx, event)
+	processor := NewPaymentProcessor(repo, anomalies)
+	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 103})
 	if err != nil {
 		t.Fatalf("process event: %v", err)
 	}
@@ -95,6 +106,14 @@ func TestPaymentProcessorProcessIgnoresOlderEvent(t *testing.T) {
 
 	if repo.upsertCalls != 0 {
 		t.Fatalf("expected older event to skip upsert, got %d calls", repo.upsertCalls)
+	}
+
+	if anomalies.calls != 1 {
+		t.Fatalf("expected older event anomaly to be recorded once, got %d calls", anomalies.calls)
+	}
+
+	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypeOlderEventTimestamp {
+		t.Fatalf("expected older timestamp anomaly, got %+v", anomalies.records)
 	}
 }
 
@@ -110,9 +129,10 @@ func TestPaymentProcessorProcessIgnoresEqualTimestampEvent(t *testing.T) {
 	}
 	event := paymentProcessorEvent("evt_404", current.PaymentID, webhook.EventTypePaymentPaid, timestamp)
 	repo := &stubPaymentStateRepository{payment: current}
+	anomalies := &stubAnomalyRecorder{}
 
-	processor := NewPaymentProcessor(repo)
-	result, err := processor.Process(ctx, event)
+	processor := NewPaymentProcessor(repo, anomalies)
+	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 104})
 	if err != nil {
 		t.Fatalf("process event: %v", err)
 	}
@@ -124,6 +144,10 @@ func TestPaymentProcessorProcessIgnoresEqualTimestampEvent(t *testing.T) {
 	if repo.upsertCalls != 0 {
 		t.Fatalf("expected equal timestamp event to skip upsert, got %d calls", repo.upsertCalls)
 	}
+
+	if anomalies.calls != 0 {
+		t.Fatalf("expected equal timestamp event to skip anomaly recording, got %d calls", anomalies.calls)
+	}
 }
 
 func TestPaymentProcessorProcessHandlesMultipleValidStatusChanges(t *testing.T) {
@@ -132,13 +156,14 @@ func TestPaymentProcessorProcessHandlesMultipleValidStatusChanges(t *testing.T) 
 	ctx := context.Background()
 	initialTimestamp := time.Date(2026, time.June, 17, 13, 30, 0, 0, time.UTC)
 	repo := &stubPaymentStateRepository{getErr: repository.ErrPaymentNotFound}
-	processor := NewPaymentProcessor(repo)
+	anomalies := &stubAnomalyRecorder{}
+	processor := NewPaymentProcessor(repo, anomalies)
 
 	firstEvent := paymentProcessorEvent("evt_405_a", "pay_405", webhook.EventTypePaymentPending, initialTimestamp)
 	secondEvent := paymentProcessorEvent("evt_405_b", "pay_405", webhook.EventTypePaymentPaid, initialTimestamp.Add(5*time.Minute))
 	thirdEvent := paymentProcessorEvent("evt_405_c", "pay_405", webhook.EventTypePaymentExpired, initialTimestamp.Add(10*time.Minute))
 
-	firstResult, err := processor.Process(ctx, firstEvent)
+	firstResult, err := processor.Process(ctx, PaymentUpdate{Event: firstEvent, WebhookEventID: 105})
 	if err != nil {
 		t.Fatalf("process first event: %v", err)
 	}
@@ -146,14 +171,14 @@ func TestPaymentProcessorProcessHandlesMultipleValidStatusChanges(t *testing.T) 
 	repo.getErr = nil
 	repo.payment = repo.lastUpserted
 
-	secondResult, err := processor.Process(ctx, secondEvent)
+	secondResult, err := processor.Process(ctx, PaymentUpdate{Event: secondEvent, WebhookEventID: 106})
 	if err != nil {
 		t.Fatalf("process second event: %v", err)
 	}
 
 	repo.payment = repo.lastUpserted
 
-	thirdResult, err := processor.Process(ctx, thirdEvent)
+	thirdResult, err := processor.Process(ctx, PaymentUpdate{Event: thirdEvent, WebhookEventID: 107})
 	if err != nil {
 		t.Fatalf("process third event: %v", err)
 	}
@@ -174,6 +199,10 @@ func TestPaymentProcessorProcessHandlesMultipleValidStatusChanges(t *testing.T) 
 		t.Fatalf("expected 3 upsert calls, got %d", repo.upsertCalls)
 	}
 
+	if anomalies.calls != 0 {
+		t.Fatalf("expected valid transitions to skip anomaly recording, got %d calls", anomalies.calls)
+	}
+
 	assertPaymentState(t, repo.lastUpserted, repository.Payment{
 		PaymentID:       thirdEvent.PaymentID,
 		Status:          thirdEvent.PaymentStatus,
@@ -188,9 +217,10 @@ func TestPaymentProcessorProcessReturnsFailedResultOnRepositoryError(t *testing.
 	event := paymentProcessorEvent("evt_406", "pay_406", webhook.EventTypePaymentFailed, time.Date(2026, time.June, 17, 14, 30, 0, 0, time.UTC))
 	repoErr := errors.New("database unavailable")
 	repo := &stubPaymentStateRepository{getErr: repoErr}
+	anomalies := &stubAnomalyRecorder{}
 
-	processor := NewPaymentProcessor(repo)
-	result, err := processor.Process(ctx, event)
+	processor := NewPaymentProcessor(repo, anomalies)
+	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 108})
 	if !errors.Is(err, repoErr) {
 		t.Fatalf("expected repository error %v, got %v", repoErr, err)
 	}
@@ -201,6 +231,62 @@ func TestPaymentProcessorProcessReturnsFailedResultOnRepositoryError(t *testing.
 
 	if repo.upsertCalls != 0 {
 		t.Fatalf("expected repository failure to skip upsert, got %d calls", repo.upsertCalls)
+	}
+
+	if anomalies.calls != 0 {
+		t.Fatalf("expected repository failure to skip anomaly recording, got %d calls", anomalies.calls)
+	}
+}
+
+func TestPaymentProcessorProcessRecordsSuspiciousTransitionWithoutChangingUpdateOutcome(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	current := repository.Payment{
+		PaymentID:       "pay_407",
+		Status:          webhook.PaymentStatusFailed,
+		StatusTimestamp: time.Date(2026, time.June, 17, 15, 30, 0, 0, time.UTC),
+	}
+	event := paymentProcessorEvent("evt_407", current.PaymentID, webhook.EventTypePaymentPaid, current.StatusTimestamp.Add(5*time.Minute))
+	repo := &stubPaymentStateRepository{payment: current}
+	anomalies := &stubAnomalyRecorder{}
+
+	processor := NewPaymentProcessor(repo, anomalies)
+	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 109})
+	if err != nil {
+		t.Fatalf("process event: %v", err)
+	}
+
+	if result.Status != PaymentProcessingStatusUpdated {
+		t.Fatalf("expected result status %q, got %q", PaymentProcessingStatusUpdated, result.Status)
+	}
+
+	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypePaidAfterFailed {
+		t.Fatalf("expected paid-after-failed anomaly, got %+v", anomalies.records)
+	}
+}
+
+func TestPaymentProcessorProcessContinuesWhenAnomalyRecordingFails(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	current := repository.Payment{
+		PaymentID:       "pay_408",
+		Status:          webhook.PaymentStatusPaid,
+		StatusTimestamp: time.Date(2026, time.June, 17, 16, 30, 0, 0, time.UTC),
+	}
+	event := paymentProcessorEvent("evt_408", current.PaymentID, webhook.EventTypePaymentFailed, current.StatusTimestamp.Add(-5*time.Minute))
+	repo := &stubPaymentStateRepository{payment: current}
+	anomalies := &stubAnomalyRecorder{err: errors.New("anomaly insert failed")}
+
+	processor := NewPaymentProcessor(repo, anomalies)
+	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 110})
+	if err != nil {
+		t.Fatalf("expected anomaly failure to be swallowed, got %v", err)
+	}
+
+	if result.Status != PaymentProcessingStatusIgnored {
+		t.Fatalf("expected result status %q, got %q", PaymentProcessingStatusIgnored, result.Status)
 	}
 }
 
@@ -226,6 +312,18 @@ func (s *stubPaymentStateRepository) Upsert(ctx context.Context, payment reposit
 	s.upsertCalls++
 	s.lastUpserted = payment
 	return s.upsertErr
+}
+
+type stubAnomalyRecorder struct {
+	calls   int
+	err     error
+	records []repository.Anomaly
+}
+
+func (s *stubAnomalyRecorder) Record(ctx context.Context, anomaly repository.Anomaly) error {
+	s.calls++
+	s.records = append(s.records, anomaly)
+	return s.err
 }
 
 func paymentProcessorEvent(providerEventID, paymentID string, eventType webhook.EventType, timestamp time.Time) webhook.PaymentEvent {
