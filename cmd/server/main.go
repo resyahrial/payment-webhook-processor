@@ -24,6 +24,7 @@ const startupTimeout = 10 * time.Second
 func main() {
 	cfg := config.Load()
 	logger := logging.NewJSONLogger(os.Stdout)
+	appMetrics := metrics.New()
 	startupCtx, cancelStartup := context.WithTimeout(context.Background(), startupTimeout)
 	defer cancelStartup()
 
@@ -33,6 +34,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() {
+		if err := appMetrics.Shutdown(context.Background()); err != nil {
+			logger.Error().Err(err).Msg("metrics shutdown failed")
+		}
 		if err := database.Close(); err != nil {
 			logger.Error().Err(err).Msg("database close failed")
 		}
@@ -43,7 +47,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	appMetrics := metrics.New()
 	webhookEventRepository := repository.NewWebhookEventRepository(database, appMetrics)
 	paymentRepository := repository.NewPaymentRepository(database, appMetrics)
 	anomalyRepository := repository.NewAnomalyRepository(database, appMetrics)

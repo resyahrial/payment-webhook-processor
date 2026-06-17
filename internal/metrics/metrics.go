@@ -1,29 +1,51 @@
 package metrics
 
 import (
+	"context"
 	"net/http"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/otlptranslator"
+	"go.opentelemetry.io/otel/attribute"
+	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
+	otelmetric "go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
 const namespace = "payment_webhook"
 
-type Metrics struct {
-	registry *prometheus.Registry
+const meterName = "payment-webhook-processor/internal/metrics"
 
-	webhookRequestsTotal      prometheus.Counter
-	webhookSuccessTotal       *prometheus.CounterVec
-	webhookErrorsTotal        *prometheus.CounterVec
-	webhookSignatureFailures  prometheus.Counter
-	webhookDuplicatesTotal    *prometheus.CounterVec
-	webhookAnomaliesTotal     *prometheus.CounterVec
-	providerEventsTotal       *prometheus.CounterVec
-	webhookResponseDuration   *prometheus.HistogramVec
-	databaseWriteDuration     *prometheus.HistogramVec
-	paymentProcessingDuration *prometheus.HistogramVec
+var (
+	resultKey      = attribute.Key("result")
+	statusKey      = attribute.Key("status")
+	operationKey   = attribute.Key("operation")
+	eventTypeKey   = attribute.Key("event_type")
+	anomalyTypeKey = attribute.Key("anomaly_type")
+)
+
+type Metrics struct {
+	registry      *prometheus.Registry
+	meterProvider *sdkmetric.MeterProvider
+
+	webhookRequestsTotal      otelmetric.Int64Counter
+	webhookSuccessTotal       otelmetric.Int64Counter
+	webhookErrorsTotal        otelmetric.Int64Counter
+	webhookSignatureFailures  otelmetric.Int64Counter
+	webhookDuplicatesTotal    otelmetric.Int64Counter
+	webhookAnomaliesTotal     otelmetric.Int64Counter
+	providerEventsTotal       otelmetric.Int64Counter
+	webhookResponseDuration   otelmetric.Float64Histogram
+	databaseWriteDuration     otelmetric.Float64Histogram
+	paymentProcessingDuration otelmetric.Float64Histogram
+}
+
+type Timer struct {
+	startedAt time.Time
+	observe   func(time.Duration)
 }
 
 func New() *Metrics {
@@ -37,77 +59,79 @@ func New() *Metrics {
 }
 
 func newWithRegistry(registry *prometheus.Registry) *Metrics {
-	m := &Metrics{
-		registry: registry,
-		webhookRequestsTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "requests_total",
-			Help:      "Total number of webhook requests received.",
-		}),
-		webhookSuccessTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "success_total",
-			Help:      "Total number of successfully handled webhooks.",
-		}, []string{"result"}),
-		webhookErrorsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "errors_total",
-			Help:      "Total number of webhook requests that returned an error.",
-		}, []string{"result"}),
-		webhookSignatureFailures: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "signature_failures_total",
-			Help:      "Total number of webhook signature validation failures.",
-		}),
-		webhookDuplicatesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "duplicates_total",
-			Help:      "Total number of duplicate webhook events.",
-		}, []string{"event_type"}),
-		webhookAnomaliesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "anomalies_total",
-			Help:      "Total number of anomalies detected while processing payments.",
-		}, []string{"anomaly_type"}),
-		providerEventsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "provider_events_total",
-			Help:      "Total number of provider events accepted for processing.",
-		}, []string{"event_type", "status"}),
-		webhookResponseDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: namespace,
-			Name:      "response_duration_seconds",
-			Help:      "Webhook response latency in seconds.",
-			Buckets:   prometheus.ExponentialBuckets(0.005, 2, 10),
-		}, []string{"result"}),
-		databaseWriteDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: namespace,
-			Name:      "database_write_duration_seconds",
-			Help:      "Database write latency in seconds.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 10),
-		}, []string{"operation"}),
-		paymentProcessingDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: namespace,
-			Name:      "processing_duration_seconds",
-			Help:      "Payment processing duration in seconds.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 10),
-		}, []string{"status"}),
+	exporter, err := otelprom.New(
+		otelprom.WithRegisterer(registry),
+		otelprom.WithNamespace(namespace),
+		otelprom.WithTranslationStrategy(otlptranslator.UnderscoreEscapingWithSuffixes),
+		otelprom.WithoutScopeInfo(),
+	)
+	if err != nil {
+		panic(err)
 	}
 
-	registry.MustRegister(
-		m.webhookRequestsTotal,
-		m.webhookSuccessTotal,
-		m.webhookErrorsTotal,
-		m.webhookSignatureFailures,
-		m.webhookDuplicatesTotal,
-		m.webhookAnomaliesTotal,
-		m.providerEventsTotal,
-		m.webhookResponseDuration,
-		m.databaseWriteDuration,
-		m.paymentProcessingDuration,
+	provider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(exporter),
+		sdkmetric.WithView(durationHistogramView("response.duration", prometheus.ExponentialBuckets(0.005, 2, 10))),
+		sdkmetric.WithView(durationHistogramView("database.write.duration", prometheus.ExponentialBuckets(0.001, 2, 10))),
+		sdkmetric.WithView(durationHistogramView("processing.duration", prometheus.ExponentialBuckets(0.001, 2, 10))),
 	)
+	meter := provider.Meter(meterName)
 
-	return m
+	webhookRequestsTotal, err := meter.Int64Counter("requests", otelmetric.WithDescription("Total number of webhook requests received."))
+	if err != nil {
+		panic(err)
+	}
+	webhookSuccessTotal, err := meter.Int64Counter("success", otelmetric.WithDescription("Total number of successfully handled webhooks."))
+	if err != nil {
+		panic(err)
+	}
+	webhookErrorsTotal, err := meter.Int64Counter("errors", otelmetric.WithDescription("Total number of webhook requests that returned an error."))
+	if err != nil {
+		panic(err)
+	}
+	webhookSignatureFailures, err := meter.Int64Counter("signature_failures", otelmetric.WithDescription("Total number of webhook signature validation failures."))
+	if err != nil {
+		panic(err)
+	}
+	webhookDuplicatesTotal, err := meter.Int64Counter("duplicates", otelmetric.WithDescription("Total number of duplicate webhook events."))
+	if err != nil {
+		panic(err)
+	}
+	webhookAnomaliesTotal, err := meter.Int64Counter("anomalies", otelmetric.WithDescription("Total number of anomalies detected while processing payments."))
+	if err != nil {
+		panic(err)
+	}
+	providerEventsTotal, err := meter.Int64Counter("provider_events", otelmetric.WithDescription("Total number of provider events accepted for processing."))
+	if err != nil {
+		panic(err)
+	}
+	webhookResponseDuration, err := meter.Float64Histogram("response.duration", otelmetric.WithDescription("Webhook response latency in seconds."), otelmetric.WithUnit("s"))
+	if err != nil {
+		panic(err)
+	}
+	databaseWriteDuration, err := meter.Float64Histogram("database.write.duration", otelmetric.WithDescription("Database write latency in seconds."), otelmetric.WithUnit("s"))
+	if err != nil {
+		panic(err)
+	}
+	paymentProcessingDuration, err := meter.Float64Histogram("processing.duration", otelmetric.WithDescription("Payment processing duration in seconds."), otelmetric.WithUnit("s"))
+	if err != nil {
+		panic(err)
+	}
+
+	return &Metrics{
+		registry:                  registry,
+		meterProvider:             provider,
+		webhookRequestsTotal:      webhookRequestsTotal,
+		webhookSuccessTotal:       webhookSuccessTotal,
+		webhookErrorsTotal:        webhookErrorsTotal,
+		webhookSignatureFailures:  webhookSignatureFailures,
+		webhookDuplicatesTotal:    webhookDuplicatesTotal,
+		webhookAnomaliesTotal:     webhookAnomaliesTotal,
+		providerEventsTotal:       providerEventsTotal,
+		webhookResponseDuration:   webhookResponseDuration,
+		databaseWriteDuration:     databaseWriteDuration,
+		paymentProcessingDuration: paymentProcessingDuration,
+	}
 }
 
 func (m *Metrics) Handler() http.Handler {
@@ -126,12 +150,20 @@ func (m *Metrics) Registry() *prometheus.Registry {
 	return m.registry
 }
 
+func (m *Metrics) Shutdown(ctx context.Context) error {
+	if m == nil || m.meterProvider == nil {
+		return nil
+	}
+
+	return m.meterProvider.Shutdown(ctx)
+}
+
 func (m *Metrics) IncWebhookRequest() {
 	if m == nil {
 		return
 	}
 
-	m.webhookRequestsTotal.Inc()
+	m.webhookRequestsTotal.Add(context.Background(), 1)
 }
 
 func (m *Metrics) IncWebhookSuccess(result string) {
@@ -139,7 +171,7 @@ func (m *Metrics) IncWebhookSuccess(result string) {
 		return
 	}
 
-	m.webhookSuccessTotal.WithLabelValues(labelValue(result)).Inc()
+	m.webhookSuccessTotal.Add(context.Background(), 1, otelmetric.WithAttributes(resultKey.String(labelValue(result))))
 }
 
 func (m *Metrics) IncWebhookError(result string) {
@@ -147,7 +179,7 @@ func (m *Metrics) IncWebhookError(result string) {
 		return
 	}
 
-	m.webhookErrorsTotal.WithLabelValues(labelValue(result)).Inc()
+	m.webhookErrorsTotal.Add(context.Background(), 1, otelmetric.WithAttributes(resultKey.String(labelValue(result))))
 }
 
 func (m *Metrics) IncSignatureFailure() {
@@ -155,7 +187,7 @@ func (m *Metrics) IncSignatureFailure() {
 		return
 	}
 
-	m.webhookSignatureFailures.Inc()
+	m.webhookSignatureFailures.Add(context.Background(), 1)
 }
 
 func (m *Metrics) IncWebhookDuplicate(eventType string) {
@@ -163,7 +195,7 @@ func (m *Metrics) IncWebhookDuplicate(eventType string) {
 		return
 	}
 
-	m.webhookDuplicatesTotal.WithLabelValues(labelValue(eventType)).Inc()
+	m.webhookDuplicatesTotal.Add(context.Background(), 1, otelmetric.WithAttributes(eventTypeKey.String(labelValue(eventType))))
 }
 
 func (m *Metrics) IncAnomaly(anomalyType string) {
@@ -171,7 +203,7 @@ func (m *Metrics) IncAnomaly(anomalyType string) {
 		return
 	}
 
-	m.webhookAnomaliesTotal.WithLabelValues(labelValue(anomalyType)).Inc()
+	m.webhookAnomaliesTotal.Add(context.Background(), 1, otelmetric.WithAttributes(anomalyTypeKey.String(labelValue(anomalyType))))
 }
 
 func (m *Metrics) IncProviderEvent(eventType, status string) {
@@ -179,7 +211,10 @@ func (m *Metrics) IncProviderEvent(eventType, status string) {
 		return
 	}
 
-	m.providerEventsTotal.WithLabelValues(labelValue(eventType), labelValue(status)).Inc()
+	m.providerEventsTotal.Add(context.Background(), 1, otelmetric.WithAttributes(
+		eventTypeKey.String(labelValue(eventType)),
+		statusKey.String(labelValue(status)),
+	))
 }
 
 func (m *Metrics) ObserveWebhookResponseDuration(result string, duration time.Duration) {
@@ -187,7 +222,7 @@ func (m *Metrics) ObserveWebhookResponseDuration(result string, duration time.Du
 		return
 	}
 
-	m.webhookResponseDuration.WithLabelValues(labelValue(result)).Observe(duration.Seconds())
+	m.webhookResponseDuration.Record(context.Background(), duration.Seconds(), otelmetric.WithAttributes(resultKey.String(labelValue(result))))
 }
 
 func (m *Metrics) ObserveDatabaseWriteDuration(operation string, duration time.Duration) {
@@ -195,7 +230,7 @@ func (m *Metrics) ObserveDatabaseWriteDuration(operation string, duration time.D
 		return
 	}
 
-	m.databaseWriteDuration.WithLabelValues(labelValue(operation)).Observe(duration.Seconds())
+	m.databaseWriteDuration.Record(context.Background(), duration.Seconds(), otelmetric.WithAttributes(operationKey.String(labelValue(operation))))
 }
 
 func (m *Metrics) ObservePaymentProcessingDuration(status string, duration time.Duration) {
@@ -203,7 +238,54 @@ func (m *Metrics) ObservePaymentProcessingDuration(status string, duration time.
 		return
 	}
 
-	m.paymentProcessingDuration.WithLabelValues(labelValue(status)).Observe(duration.Seconds())
+	m.paymentProcessingDuration.Record(context.Background(), duration.Seconds(), otelmetric.WithAttributes(statusKey.String(labelValue(status))))
+}
+
+func (m *Metrics) StartWebhookResponseTimer(result *string) Timer {
+	if m == nil {
+		return Timer{}
+	}
+
+	return Timer{
+		startedAt: time.Now(),
+		observe: func(duration time.Duration) {
+			label := "unknown"
+			if result != nil {
+				label = *result
+			}
+			m.ObserveWebhookResponseDuration(label, duration)
+		},
+	}
+}
+
+func (m *Metrics) StartDatabaseWriteTimer(operation string) Timer {
+	if m == nil {
+		return Timer{}
+	}
+
+	return Timer{
+		startedAt: time.Now(),
+		observe: func(duration time.Duration) {
+			m.ObserveDatabaseWriteDuration(operation, duration)
+		},
+	}
+}
+
+func (m *Metrics) StartPaymentProcessingTimer(status *string) Timer {
+	if m == nil {
+		return Timer{}
+	}
+
+	return Timer{
+		startedAt: time.Now(),
+		observe: func(duration time.Duration) {
+			label := "unknown"
+			if status != nil {
+				label = *status
+			}
+			m.ObservePaymentProcessingDuration(label, duration)
+		},
+	}
 }
 
 func labelValue(value string) string {
@@ -212,4 +294,24 @@ func labelValue(value string) string {
 	}
 
 	return value
+}
+
+func (t Timer) Observe() time.Duration {
+	if t.startedAt.IsZero() {
+		return 0
+	}
+
+	duration := time.Since(t.startedAt)
+	if t.observe != nil {
+		t.observe(duration)
+	}
+
+	return duration
+}
+
+func durationHistogramView(name string, buckets []float64) sdkmetric.View {
+	return sdkmetric.NewView(
+		sdkmetric.Instrument{Name: name},
+		sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{Boundaries: buckets}},
+	)
 }

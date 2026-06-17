@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"payment-webhook-processor/internal/metrics"
 	"payment-webhook-processor/internal/repository"
@@ -40,10 +39,10 @@ func NewPaymentProcessor(repository PaymentStateRepository, anomalyRecorder Anom
 }
 
 func (p *PaymentProcessor) Process(ctx context.Context, update PaymentUpdate) (PaymentProcessingResult, error) {
-	startedAt := time.Now()
-	resultStatus := PaymentProcessingStatusFailed
+	resultStatus := string(PaymentProcessingStatusFailed)
+	timer := p.metrics.StartPaymentProcessingTimer(&resultStatus)
 	defer func() {
-		p.metrics.ObservePaymentProcessingDuration(string(resultStatus), time.Since(startedAt))
+		timer.Observe()
 	}()
 
 	current, err := p.repository.GetByPaymentID(ctx, update.Event.PaymentID)
@@ -53,7 +52,7 @@ func (p *PaymentProcessor) Process(ctx context.Context, update PaymentUpdate) (P
 				return PaymentProcessingResult{Status: PaymentProcessingStatusFailed}, fmt.Errorf("create payment state: %w", err)
 			}
 
-			resultStatus = PaymentProcessingStatusCreated
+			resultStatus = string(PaymentProcessingStatusCreated)
 			return PaymentProcessingResult{Status: PaymentProcessingStatusCreated}, nil
 		}
 
@@ -63,7 +62,7 @@ func (p *PaymentProcessor) Process(ctx context.Context, update PaymentUpdate) (P
 	p.recordAnomalies(ctx, DetectAnomalies(current, update.Event, update.WebhookEventID))
 
 	if !update.Event.EventTimestamp.After(current.StatusTimestamp) {
-		resultStatus = PaymentProcessingStatusIgnored
+		resultStatus = string(PaymentProcessingStatusIgnored)
 		return PaymentProcessingResult{Status: PaymentProcessingStatusIgnored}, nil
 	}
 
@@ -71,7 +70,7 @@ func (p *PaymentProcessor) Process(ctx context.Context, update PaymentUpdate) (P
 		return PaymentProcessingResult{Status: PaymentProcessingStatusFailed}, fmt.Errorf("update payment state: %w", err)
 	}
 
-	resultStatus = PaymentProcessingStatusUpdated
+	resultStatus = string(PaymentProcessingStatusUpdated)
 	return PaymentProcessingResult{Status: PaymentProcessingStatusUpdated}, nil
 }
 
