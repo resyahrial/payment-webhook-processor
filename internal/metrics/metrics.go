@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"time"
 
@@ -41,6 +42,11 @@ type Metrics struct {
 	webhookResponseDuration   otelmetric.Float64Histogram
 	databaseWriteDuration     otelmetric.Float64Histogram
 	paymentProcessingDuration otelmetric.Float64Histogram
+	dbOpenConnections         otelmetric.Int64ObservableGauge
+	dbInUseConnections        otelmetric.Int64ObservableGauge
+	dbIdleConnections         otelmetric.Int64ObservableGauge
+	dbWaitCount               otelmetric.Int64ObservableCounter
+	dbWaitDuration            otelmetric.Float64ObservableCounter
 }
 
 type Timer struct {
@@ -117,6 +123,26 @@ func newWithRegistry(registry *prometheus.Registry) *Metrics {
 	if err != nil {
 		panic(err)
 	}
+	dbOpenConnections, err := meter.Int64ObservableGauge("db.open_connections", otelmetric.WithDescription("Current number of open database connections."))
+	if err != nil {
+		panic(err)
+	}
+	dbInUseConnections, err := meter.Int64ObservableGauge("db.in_use_connections", otelmetric.WithDescription("Current number of in-use database connections."))
+	if err != nil {
+		panic(err)
+	}
+	dbIdleConnections, err := meter.Int64ObservableGauge("db.idle_connections", otelmetric.WithDescription("Current number of idle database connections."))
+	if err != nil {
+		panic(err)
+	}
+	dbWaitCount, err := meter.Int64ObservableCounter("db.wait_count", otelmetric.WithDescription("Total number of database connection waits."))
+	if err != nil {
+		panic(err)
+	}
+	dbWaitDuration, err := meter.Float64ObservableCounter("db.wait_duration", otelmetric.WithDescription("Total database connection wait duration in seconds."), otelmetric.WithUnit("s"))
+	if err != nil {
+		panic(err)
+	}
 
 	return &Metrics{
 		registry:                  registry,
@@ -131,7 +157,34 @@ func newWithRegistry(registry *prometheus.Registry) *Metrics {
 		webhookResponseDuration:   webhookResponseDuration,
 		databaseWriteDuration:     databaseWriteDuration,
 		paymentProcessingDuration: paymentProcessingDuration,
+		dbOpenConnections:         dbOpenConnections,
+		dbInUseConnections:        dbInUseConnections,
+		dbIdleConnections:         dbIdleConnections,
+		dbWaitCount:               dbWaitCount,
+		dbWaitDuration:            dbWaitDuration,
 	}
+}
+
+func (m *Metrics) RegisterDatabaseStatsCollector(db *sql.DB) error {
+	if m == nil || m.meterProvider == nil || db == nil {
+		return nil
+	}
+
+	meter := m.meterProvider.Meter(meterName)
+	_, err := meter.RegisterCallback(func(_ context.Context, observer otelmetric.Observer) error {
+		stats := db.Stats()
+		observer.ObserveInt64(m.dbOpenConnections, int64(stats.OpenConnections))
+		observer.ObserveInt64(m.dbInUseConnections, int64(stats.InUse))
+		observer.ObserveInt64(m.dbIdleConnections, int64(stats.Idle))
+		observer.ObserveInt64(m.dbWaitCount, stats.WaitCount)
+		observer.ObserveFloat64(m.dbWaitDuration, stats.WaitDuration.Seconds())
+		return nil
+	}, m.dbOpenConnections, m.dbInUseConnections, m.dbIdleConnections, m.dbWaitCount, m.dbWaitDuration)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (m *Metrics) Handler() http.Handler {

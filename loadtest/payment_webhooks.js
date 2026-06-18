@@ -6,6 +6,7 @@ import { Counter } from 'k6/metrics';
 
 const webhookPath = '/webhooks/payment';
 const healthzPath = '/healthz';
+const providerTimeoutMs = 5000;
 const selectedScenario = (__ENV.SCENARIO || 'normal').trim();
 const baseURL = (__ENV.K6_WEBHOOK_BASE_URL || 'http://localhost:8080').trim();
 const signingSecret = __ENV.WEBHOOK_SIGNING_SECRET || 'dev-webhook-signing-secret';
@@ -14,6 +15,7 @@ const processedResponses = new Counter('processed_responses');
 const duplicateResponses = new Counter('duplicate_responses');
 const unauthorizedResponses = new Counter('unauthorized_responses');
 const unexpectedResponses = new Counter('unexpected_responses');
+const supportedScenarioNames = ['normal', 'duplicate', 'mixed_signatures', 'spike', 'capacity_ramp', 'noisy_neighbor', 'hot_payments'];
 
 const scenarioProfiles = {
   normal: {
@@ -50,19 +52,32 @@ const scenarioProfiles = {
     preAllocatedVUs: 25,
     maxVUs: 120,
   },
+  capacity_ramp: {
+    executor: 'ramping-arrival-rate',
+    exec: 'runCapacityRampScenario',
+    startRate: integerEnv('K6_CAPACITY_START_RATE', 10),
+    timeUnit: '1s',
+    preAllocatedVUs: 50,
+    maxVUs: 250,
+    stages: capacityRampStages(integerEnv('K6_CAPACITY_PEAK_RATE', 250)),
+  },
+  hot_payments: {
+    executor: 'constant-arrival-rate',
+    exec: 'runHotPaymentsScenario',
+    duration: '45s',
+    timeUnit: '1s',
+    rate: integerEnv('K6_HOT_PAYMENT_RATE', 150),
+    preAllocatedVUs: 40,
+    maxVUs: 200,
+  },
 };
 
-if (!scenarioProfiles[selectedScenario]) {
+if (!supportedScenarioNames.includes(selectedScenario)) {
   throw new Error(`unsupported SCENARIO ${selectedScenario}`);
 }
 
 export const options = {
-  scenarios: {
-    [selectedScenario]: {
-      ...scenarioProfiles[selectedScenario],
-      tags: { loadtest_scenario: selectedScenario },
-    },
-  },
+  scenarios: scenariosFor(selectedScenario),
   thresholds: thresholdsFor(selectedScenario),
 };
 
@@ -147,6 +162,7 @@ export function runSpikeScenario(data) {
     paymentID: ids.paymentID,
     eventType: eventTypeForIteration(),
     validSignature: true,
+    trafficStream: 'primary',
   });
 
   const body = response.json();
@@ -160,10 +176,95 @@ export function runSpikeScenario(data) {
   recordOutcome(response, status, passed);
 }
 
+export function runCapacityRampScenario(data) {
+  const ids = uniqueIDs(data.runID, 'capacity');
+  const response = sendWebhookRequest({
+    providerEventID: ids.providerEventID,
+    paymentID: ids.paymentID,
+    eventType: eventTypeForIteration(),
+    validSignature: true,
+    trafficStream: 'primary',
+  });
+
+  const body = response.json();
+  const status = body && body.status;
+
+  const passed = check(response, {
+    'capacity_ramp returns 200 or 500': (res) => res.status === 200 || res.status === 500,
+    'capacity_ramp returns processed or internal_error': () => status === 'processed' || status === 'internal_error',
+  });
+
+  recordOutcome(response, status, passed);
+}
+
+export function runNoisyNeighborBaselineScenario(data) {
+  const ids = uniqueIDs(data.runID, 'baseline');
+  const response = sendWebhookRequest({
+    providerEventID: ids.providerEventID,
+    paymentID: ids.paymentID,
+    eventType: eventTypeForIteration(),
+    validSignature: true,
+    trafficStream: 'baseline',
+  });
+
+  const body = response.json();
+  const status = body && body.status;
+
+  const passed = check(response, {
+    'noisy baseline returns 200': (res) => res.status === 200,
+    'noisy baseline returns processed': () => status === 'processed',
+  });
+
+  recordOutcome(response, status, passed);
+}
+
+export function runNoisyNeighborSpikeScenario(data) {
+  const ids = uniqueIDs(data.runID, 'noisy');
+  const response = sendWebhookRequest({
+    providerEventID: ids.providerEventID,
+    paymentID: ids.paymentID,
+    eventType: eventTypeForIteration(),
+    validSignature: true,
+    trafficStream: 'noisy',
+  });
+
+  const body = response.json();
+  const status = body && body.status;
+
+  const passed = check(response, {
+    'noisy spike returns 200 or 500': (res) => res.status === 200 || res.status === 500,
+    'noisy spike returns processed or internal_error': () => status === 'processed' || status === 'internal_error',
+  });
+
+  recordOutcome(response, status, passed);
+}
+
+export function runHotPaymentsScenario(data) {
+  const ids = uniqueIDs(data.runID, 'hot');
+  const response = sendWebhookRequest({
+    providerEventID: ids.providerEventID,
+    paymentID: hotPaymentID(data.runID),
+    eventType: eventTypeForIteration(),
+    validSignature: true,
+    trafficStream: 'primary',
+  });
+
+  const body = response.json();
+  const status = body && body.status;
+
+  const passed = check(response, {
+    'hot_payments returns 200 or 500': (res) => res.status === 200 || res.status === 500,
+    'hot_payments returns processed, internal_error, or duplicate': () =>
+      status === 'processed' || status === 'internal_error' || status === 'duplicate',
+  });
+
+  recordOutcome(response, status, passed);
+}
+
 function thresholdsFor(scenarioName) {
   const common = {
     checks: ['rate>0.99'],
-    http_req_duration: ['p(95)<1500'],
+    http_req_duration: [`p(95)<${providerTimeoutMs}`],
     unexpected_responses: ['count==0'],
   };
 
@@ -190,7 +291,31 @@ function thresholdsFor(scenarioName) {
     case 'spike':
       return {
         checks: ['rate>0.95'],
-        http_req_duration: ['p(95)<5000'],
+        http_req_duration: [`p(95)<${providerTimeoutMs}`],
+        http_req_failed: ['rate<0.35'],
+        processed_responses: ['count>0'],
+        unexpected_responses: ['count==0'],
+      };
+    case 'capacity_ramp':
+      return {
+        checks: ['rate>0.95'],
+        http_req_duration: [`p(95)<${providerTimeoutMs}`],
+        http_req_failed: ['rate<0.35'],
+        processed_responses: ['count>0'],
+        unexpected_responses: ['count==0'],
+      };
+    case 'noisy_neighbor':
+      return {
+        checks: ['rate>0.95'],
+        'http_req_duration{traffic_stream:baseline}': [`p(95)<${providerTimeoutMs}`],
+        http_req_failed: ['rate<0.35'],
+        processed_responses: ['count>0'],
+        unexpected_responses: ['count==0'],
+      };
+    case 'hot_payments':
+      return {
+        checks: ['rate>0.95'],
+        http_req_duration: [`p(95)<${providerTimeoutMs}`],
         http_req_failed: ['rate<0.35'],
         processed_responses: ['count>0'],
         unexpected_responses: ['count==0'],
@@ -200,7 +325,46 @@ function thresholdsFor(scenarioName) {
   }
 }
 
-function sendWebhookRequest({ providerEventID, paymentID, eventType, validSignature }) {
+function scenariosFor(scenarioName) {
+  if (scenarioName === 'noisy_neighbor') {
+    return {
+      noisy_neighbor_baseline: {
+        executor: 'constant-arrival-rate',
+        exec: 'runNoisyNeighborBaselineScenario',
+        duration: '45s',
+        timeUnit: '1s',
+        rate: integerEnv('K6_NOISY_BASELINE_RATE', 5),
+        preAllocatedVUs: 10,
+        maxVUs: 40,
+        tags: { loadtest_scenario: scenarioName, traffic_stream: 'baseline' },
+      },
+      noisy_neighbor_spike: {
+        executor: 'ramping-arrival-rate',
+        exec: 'runNoisyNeighborSpikeScenario',
+        startRate: integerEnv('K6_NOISY_SPIKE_START_RATE', 20),
+        timeUnit: '1s',
+        preAllocatedVUs: 30,
+        maxVUs: 180,
+        stages: [
+          { target: integerEnv('K6_NOISY_SPIKE_START_RATE', 20), duration: '10s' },
+          { target: integerEnv('K6_NOISY_SPIKE_PEAK_RATE', 200), duration: '15s' },
+          { target: integerEnv('K6_NOISY_SPIKE_PEAK_RATE', 200), duration: '10s' },
+          { target: integerEnv('K6_NOISY_SPIKE_START_RATE', 20), duration: '10s' },
+        ],
+        tags: { loadtest_scenario: scenarioName, traffic_stream: 'noisy' },
+      },
+    };
+  }
+
+  return {
+    [scenarioName]: {
+      ...scenarioProfiles[scenarioName],
+      tags: { loadtest_scenario: scenarioName },
+    },
+  };
+}
+
+function sendWebhookRequest({ providerEventID, paymentID, eventType, validSignature, trafficStream = 'primary' }) {
   const payload = JSON.stringify({
     provider_event_id: providerEventID,
     payment_id: paymentID,
@@ -219,6 +383,7 @@ function sendWebhookRequest({ providerEventID, paymentID, eventType, validSignat
       endpoint: webhookPath,
       loadtest_scenario: selectedScenario,
       signature: validSignature ? 'valid' : 'invalid',
+      traffic_stream: trafficStream,
     },
   });
 }
@@ -241,6 +406,24 @@ function uniqueIDs(runID, prefix) {
 function eventTypeForIteration() {
   const eventTypes = ['payment.pending', 'payment.paid', 'payment.failed', 'payment.expired'];
   return eventTypes[exec.scenario.iterationInTest % eventTypes.length];
+}
+
+function hotPaymentID(runID) {
+  const setSize = integerEnv('K6_HOT_PAYMENT_SET_SIZE', 5);
+  return `pay_hot_shared_${runID}_${exec.scenario.iterationInTest % setSize}`;
+}
+
+function capacityRampStages(peakRate) {
+  const quarter = Math.max(1, Math.floor(peakRate / 4));
+  const half = Math.max(1, Math.floor(peakRate / 2));
+  const threeQuarter = Math.max(1, Math.floor((peakRate * 3) / 4));
+
+  return [
+    { target: quarter, duration: '15s' },
+    { target: half, duration: '15s' },
+    { target: threeQuarter, duration: '15s' },
+    { target: peakRate, duration: '15s' },
+  ];
 }
 
 function recordOutcome(response, status, passed) {

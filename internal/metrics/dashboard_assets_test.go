@@ -62,9 +62,9 @@ func TestGrafanaDashboardProvisioningReferencesDashboardPath(t *testing.T) {
 	var config struct {
 		APIVersion int `yaml:"apiVersion"`
 		Providers  []struct {
-			Name     string `yaml:"name"`
-			Type     string `yaml:"type"`
-			Options  struct {
+			Name    string `yaml:"name"`
+			Type    string `yaml:"type"`
+			Options struct {
 				Path string `yaml:"path"`
 			} `yaml:"options"`
 		} `yaml:"providers"`
@@ -113,6 +113,9 @@ func TestGrafanaDashboardContainsRequiredPanelsAndQueries(t *testing.T) {
 		"Anomaly Count",
 		"Provider Traffic Spike",
 		"Payment Event Status Distribution",
+		"DB Pool Connections",
+		"DB Pool Wait Rate",
+		"DB Pool Wait Duration",
 	}
 
 	for _, title := range requiredTitles {
@@ -148,6 +151,11 @@ func TestGrafanaDashboardContainsRequiredPanelsAndQueries(t *testing.T) {
 	assertPanelQueryContains(t, panels, "Anomaly Count", "payment_webhook_anomalies_total")
 	assertPanelQueryContains(t, panels, "Provider Traffic Spike", "payment_webhook_provider_events_total")
 	assertPanelQueryContains(t, panels, "Payment Event Status Distribution", "payment_webhook_provider_events_total")
+	assertPanelQueryContains(t, panels, "DB Pool Connections", "payment_webhook_db_open_connections")
+	assertPanelQueryContains(t, panels, "DB Pool Connections", "payment_webhook_db_in_use_connections")
+	assertPanelQueryContains(t, panels, "DB Pool Connections", "payment_webhook_db_idle_connections")
+	assertPanelQueryContains(t, panels, "DB Pool Wait Rate", "payment_webhook_db_wait_count_total")
+	assertPanelQueryContains(t, panels, "DB Pool Wait Duration", "payment_webhook_db_wait_duration_seconds_total")
 	assertPanelQueryContains(t, panels, "Webhook Success and Error Rate", "payment_webhook_success_total")
 	assertPanelQueryContains(t, panels, "Webhook Success and Error Rate", "payment_webhook_errors_total")
 	assertPanelQueryContains(t, panels, "Webhook Success and Error Rate", "payment_webhook_signature_failures_total")

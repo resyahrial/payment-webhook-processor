@@ -28,7 +28,12 @@ func main() {
 	startupCtx, cancelStartup := context.WithTimeout(context.Background(), startupTimeout)
 	defer cancelStartup()
 
-	database, err := db.Open(startupCtx, cfg.DatabaseURL)
+	poolConfig := db.PoolConfig{
+		MaxOpenConns:    cfg.DBMaxOpenConns,
+		MaxIdleConns:    cfg.DBMaxIdleConns,
+		ConnMaxLifetime: cfg.DBConnMaxLifetime,
+	}
+	database, err := db.Open(startupCtx, cfg.DatabaseURL, poolConfig)
 	if err != nil {
 		logger.Error().Err(err).Msg("database initialization failed")
 		os.Exit(1)
@@ -41,6 +46,10 @@ func main() {
 			logger.Error().Err(err).Msg("database close failed")
 		}
 	}()
+	if err := appMetrics.RegisterDatabaseStatsCollector(database); err != nil {
+		logger.Error().Err(err).Msg("database metrics registration failed")
+		os.Exit(1)
+	}
 
 	if err := db.RunMigrations(startupCtx, database); err != nil {
 		logger.Error().Err(err).Msg("database migration failed")

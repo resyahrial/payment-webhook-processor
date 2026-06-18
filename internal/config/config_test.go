@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadUsesDefaultsWhenEnvironmentVariablesAreUnset(t *testing.T) {
 	t.Setenv("PORT", "")
@@ -8,6 +11,9 @@ func TestLoadUsesDefaultsWhenEnvironmentVariablesAreUnset(t *testing.T) {
 	t.Setenv("WEBHOOK_SIGNING_SECRET", "")
 	t.Setenv("APP_ENV", "")
 	t.Setenv("ENV", "")
+	t.Setenv("DB_MAX_OPEN_CONNS", "")
+	t.Setenv("DB_MAX_IDLE_CONNS", "")
+	t.Setenv("DB_CONN_MAX_LIFETIME", "")
 
 	cfg := Load()
 
@@ -26,6 +32,18 @@ func TestLoadUsesDefaultsWhenEnvironmentVariablesAreUnset(t *testing.T) {
 	if cfg.Environment != "development" {
 		t.Fatalf("expected default environment development, got %q", cfg.Environment)
 	}
+
+	if cfg.DBMaxOpenConns != defaultDBMaxOpenConns {
+		t.Fatalf("expected default DB max open conns %d, got %d", defaultDBMaxOpenConns, cfg.DBMaxOpenConns)
+	}
+
+	if cfg.DBMaxIdleConns != defaultDBMaxIdleConns {
+		t.Fatalf("expected default DB max idle conns %d, got %d", defaultDBMaxIdleConns, cfg.DBMaxIdleConns)
+	}
+
+	if cfg.DBConnMaxLifetime != defaultDBConnMaxLifetime {
+		t.Fatalf("expected default DB conn max lifetime %s, got %s", defaultDBConnMaxLifetime, cfg.DBConnMaxLifetime)
+	}
 }
 
 func TestLoadUsesEnvironmentOverrides(t *testing.T) {
@@ -34,6 +52,9 @@ func TestLoadUsesEnvironmentOverrides(t *testing.T) {
 	t.Setenv("WEBHOOK_SIGNING_SECRET", "top-secret")
 	t.Setenv("APP_ENV", "staging")
 	t.Setenv("ENV", "production")
+	t.Setenv("DB_MAX_OPEN_CONNS", "21")
+	t.Setenv("DB_MAX_IDLE_CONNS", "7")
+	t.Setenv("DB_CONN_MAX_LIFETIME", "45m")
 
 	cfg := Load()
 
@@ -51,5 +72,37 @@ func TestLoadUsesEnvironmentOverrides(t *testing.T) {
 
 	if cfg.Environment != "staging" {
 		t.Fatalf("expected APP_ENV to take precedence, got %q", cfg.Environment)
+	}
+
+	if cfg.DBMaxOpenConns != 21 {
+		t.Fatalf("expected DB max open conns override 21, got %d", cfg.DBMaxOpenConns)
+	}
+
+	if cfg.DBMaxIdleConns != 7 {
+		t.Fatalf("expected DB max idle conns override 7, got %d", cfg.DBMaxIdleConns)
+	}
+
+	if cfg.DBConnMaxLifetime != 45*time.Minute {
+		t.Fatalf("expected DB conn max lifetime override 45m, got %s", cfg.DBConnMaxLifetime)
+	}
+}
+
+func TestLoadFallsBackForInvalidDatabasePoolOverrides(t *testing.T) {
+	t.Setenv("DB_MAX_OPEN_CONNS", "-1")
+	t.Setenv("DB_MAX_IDLE_CONNS", "bad")
+	t.Setenv("DB_CONN_MAX_LIFETIME", "not-a-duration")
+
+	cfg := Load()
+
+	if cfg.DBMaxOpenConns != defaultDBMaxOpenConns {
+		t.Fatalf("expected invalid DB max open conns to fall back to %d, got %d", defaultDBMaxOpenConns, cfg.DBMaxOpenConns)
+	}
+
+	if cfg.DBMaxIdleConns != defaultDBMaxIdleConns {
+		t.Fatalf("expected invalid DB max idle conns to fall back to %d, got %d", defaultDBMaxIdleConns, cfg.DBMaxIdleConns)
+	}
+
+	if cfg.DBConnMaxLifetime != defaultDBConnMaxLifetime {
+		t.Fatalf("expected invalid DB conn max lifetime to fall back to %s, got %s", defaultDBConnMaxLifetime, cfg.DBConnMaxLifetime)
 	}
 }

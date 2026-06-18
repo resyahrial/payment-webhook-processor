@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -39,6 +40,30 @@ func TestMetricsExportsPrometheusCompatibleSeries(t *testing.T) {
 	assertHistogramCount(t, m, "payment_webhook_response_duration_seconds", map[string]string{"result": "processed"}, 1)
 	assertHistogramCount(t, m, "payment_webhook_database_write_duration_seconds", map[string]string{"operation": "upsert_payment"}, 1)
 	assertHistogramCount(t, m, "payment_webhook_processing_duration_seconds", map[string]string{"status": "updated"}, 1)
+}
+
+func TestRegisterDatabaseStatsCollectorExportsPoolSeries(t *testing.T) {
+	t.Parallel()
+
+	m := New()
+	t.Cleanup(func() {
+		if err := m.Shutdown(context.Background()); err != nil {
+			t.Fatalf("shutdown metrics: %v", err)
+		}
+	})
+
+	database := &sql.DB{}
+	database.SetMaxOpenConns(12)
+
+	if err := m.RegisterDatabaseStatsCollector(database); err != nil {
+		t.Fatalf("register database stats collector: %v", err)
+	}
+
+	assertGaugeValue(t, m, "payment_webhook_db_open_connections", nil, 0)
+	assertGaugeValue(t, m, "payment_webhook_db_in_use_connections", nil, 0)
+	assertGaugeValue(t, m, "payment_webhook_db_idle_connections", nil, 0)
+	assertCounterValue(t, m, "payment_webhook_db_wait_count_total", nil, 0)
+	assertCounterValue(t, m, "payment_webhook_db_wait_duration_seconds_total", nil, 0)
 }
 
 func TestWebhookResponseTimerUsesFinalResultLabel(t *testing.T) {
@@ -83,6 +108,15 @@ func assertHistogramCount(t *testing.T, metrics *Metrics, metricName string, exp
 	metric := findMetric(t, metrics, metricName, expectedLabels)
 	if got := metric.GetHistogram().GetSampleCount(); got != expectedCount {
 		t.Fatalf("expected histogram %s with labels %v count %d, got %d", metricName, expectedLabels, expectedCount, got)
+	}
+}
+
+func assertGaugeValue(t *testing.T, metrics *Metrics, metricName string, expectedLabels map[string]string, expectedValue float64) {
+	t.Helper()
+
+	metric := findMetric(t, metrics, metricName, expectedLabels)
+	if got := metric.GetGauge().GetValue(); got != expectedValue {
+		t.Fatalf("expected gauge %s with labels %v to be %v, got %v", metricName, expectedLabels, expectedValue, got)
 	}
 }
 
