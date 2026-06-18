@@ -19,6 +19,7 @@ func TestGrafanaPrometheusDatasourceProvisioning(t *testing.T) {
 		APIVersion  int `yaml:"apiVersion"`
 		Datasources []struct {
 			Name      string `yaml:"name"`
+			UID       string `yaml:"uid"`
 			Type      string `yaml:"type"`
 			URL       string `yaml:"url"`
 			IsDefault bool   `yaml:"isDefault"`
@@ -38,6 +39,9 @@ func TestGrafanaPrometheusDatasourceProvisioning(t *testing.T) {
 	datasource := config.Datasources[0]
 	if datasource.Name != "Prometheus" {
 		t.Fatalf("expected datasource name Prometheus, got %q", datasource.Name)
+	}
+	if datasource.UID != "prometheus" {
+		t.Fatalf("expected datasource UID prometheus, got %q", datasource.UID)
 	}
 	if datasource.Type != "prometheus" {
 		t.Fatalf("expected datasource type prometheus, got %q", datasource.Type)
@@ -115,6 +119,24 @@ func TestGrafanaDashboardContainsRequiredPanelsAndQueries(t *testing.T) {
 		if !dashboardHasPanelTitle(panels, title) {
 			t.Fatalf("expected dashboard to contain panel %q", title)
 		}
+	}
+
+	for _, panel := range panels {
+		panelMap, ok := panel.(map[string]any)
+		if !ok {
+			continue
+		}
+		datasource, ok := panelMap["datasource"].(map[string]any)
+		if !ok {
+			t.Fatalf("panel %q has no datasource", panelMap["title"])
+		}
+		if datasource["uid"] != "prometheus" {
+			t.Fatalf("panel %q expected datasource UID prometheus, got %q", panelMap["title"], datasource["uid"])
+		}
+	}
+
+	if strings.Contains(string(content), "${DS_PROMETHEUS}") {
+		t.Fatal("dashboard contains unresolved ${DS_PROMETHEUS} placeholder")
 	}
 
 	assertPanelQueryContains(t, panels, "P95 Webhook Latency", "histogram_quantile(0.95")
