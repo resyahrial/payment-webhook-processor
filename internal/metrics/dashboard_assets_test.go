@@ -116,6 +116,13 @@ func TestGrafanaDashboardContainsRequiredPanelsAndQueries(t *testing.T) {
 		"DB Pool Connections",
 		"DB Pool Wait Rate",
 		"DB Pool Wait Duration",
+		"Payment Processing Outcomes",
+		"App CPU Usage",
+		"App RSS Memory",
+		"App Goroutines",
+		"PostgreSQL Availability",
+		"PostgreSQL Connections",
+		"PostgreSQL Transaction Rate",
 	}
 
 	for _, title := range requiredTitles {
@@ -156,9 +163,36 @@ func TestGrafanaDashboardContainsRequiredPanelsAndQueries(t *testing.T) {
 	assertPanelQueryContains(t, panels, "DB Pool Connections", "payment_webhook_db_idle_connections")
 	assertPanelQueryContains(t, panels, "DB Pool Wait Rate", "payment_webhook_db_wait_count_total")
 	assertPanelQueryContains(t, panels, "DB Pool Wait Duration", "payment_webhook_db_wait_duration_seconds_total")
+	assertPanelQueryContains(t, panels, "Payment Processing Outcomes", "payment_webhook_payment_processing_total")
+	assertPanelQueryContains(t, panels, "App CPU Usage", "process_cpu_seconds_total")
+	assertPanelQueryContains(t, panels, "App RSS Memory", "process_resident_memory_bytes")
+	assertPanelQueryContains(t, panels, "App Goroutines", "go_goroutines")
+	assertPanelQueryContains(t, panels, "PostgreSQL Availability", "pg_up")
+	assertPanelQueryContains(t, panels, "PostgreSQL Connections", "pg_stat_database_numbackends")
+	assertPanelQueryContains(t, panels, "PostgreSQL Transaction Rate", "pg_stat_database_xact_commit")
+	assertPanelQueryContains(t, panels, "PostgreSQL Transaction Rate", "pg_stat_database_xact_rollback")
 	assertPanelQueryContains(t, panels, "Webhook Success and Error Rate", "payment_webhook_success_total")
 	assertPanelQueryContains(t, panels, "Webhook Success and Error Rate", "payment_webhook_errors_total")
 	assertPanelQueryContains(t, panels, "Webhook Success and Error Rate", "payment_webhook_signature_failures_total")
+}
+
+func TestPrometheusScrapesAppAndPostgresExporterTargets(t *testing.T) {
+	t.Parallel()
+
+	content := string(readModuleFile(t, "prometheus", "prometheus.yml"))
+
+	requiredSnippets := []string{
+		"job_name: payment-webhook-processor",
+		"app:8080",
+		"job_name: postgres-exporter",
+		"postgres-exporter:9187",
+	}
+
+	for _, snippet := range requiredSnippets {
+		if !strings.Contains(content, snippet) {
+			t.Fatalf("expected prometheus.yml to contain %q", snippet)
+		}
+	}
 }
 
 func TestDockerComposeMountsGrafanaProvisioningAndDashboardAssets(t *testing.T) {
@@ -169,6 +203,9 @@ func TestDockerComposeMountsGrafanaProvisioningAndDashboardAssets(t *testing.T) 
 	requiredSnippets := []string{
 		"./grafana/provisioning:/etc/grafana/provisioning:ro",
 		"./grafana/dashboards:/var/lib/grafana/dashboards:ro",
+		"postgres-exporter:",
+		"quay.io/prometheuscommunity/postgres-exporter:v0.17.1",
+		"9187:9187",
 	}
 
 	for _, snippet := range requiredSnippets {

@@ -39,6 +39,7 @@ type Metrics struct {
 	webhookDuplicatesTotal    otelmetric.Int64Counter
 	webhookAnomaliesTotal     otelmetric.Int64Counter
 	providerEventsTotal       otelmetric.Int64Counter
+	paymentProcessingTotal    otelmetric.Int64Counter
 	webhookResponseDuration   otelmetric.Float64Histogram
 	databaseWriteDuration     otelmetric.Float64Histogram
 	paymentProcessingDuration otelmetric.Float64Histogram
@@ -111,6 +112,10 @@ func newWithRegistry(registry *prometheus.Registry) *Metrics {
 	if err != nil {
 		panic(err)
 	}
+	paymentProcessingTotal, err := meter.Int64Counter("payment_processing", otelmetric.WithDescription("Total number of payment processing outcomes by status."))
+	if err != nil {
+		panic(err)
+	}
 	webhookResponseDuration, err := meter.Float64Histogram("response.duration", otelmetric.WithDescription("Webhook response latency in seconds."), otelmetric.WithUnit("s"))
 	if err != nil {
 		panic(err)
@@ -154,6 +159,7 @@ func newWithRegistry(registry *prometheus.Registry) *Metrics {
 		webhookDuplicatesTotal:    webhookDuplicatesTotal,
 		webhookAnomaliesTotal:     webhookAnomaliesTotal,
 		providerEventsTotal:       providerEventsTotal,
+		paymentProcessingTotal:    paymentProcessingTotal,
 		webhookResponseDuration:   webhookResponseDuration,
 		databaseWriteDuration:     databaseWriteDuration,
 		paymentProcessingDuration: paymentProcessingDuration,
@@ -268,6 +274,14 @@ func (m *Metrics) IncProviderEvent(eventType, status string) {
 		eventTypeKey.String(labelValue(eventType)),
 		statusKey.String(labelValue(status)),
 	))
+}
+
+func (m *Metrics) IncPaymentProcessing(status string) {
+	if m == nil {
+		return
+	}
+
+	m.paymentProcessingTotal.Add(context.Background(), 1, otelmetric.WithAttributes(statusKey.String(labelValue(status))))
 }
 
 func (m *Metrics) ObserveWebhookResponseDuration(result string, duration time.Duration) {

@@ -42,6 +42,7 @@ func (p *PaymentProcessor) Process(ctx context.Context, update PaymentUpdate) (P
 	resultStatus := string(PaymentProcessingStatusFailed)
 	timer := p.metrics.StartPaymentProcessingTimer(&resultStatus)
 	defer func() {
+		p.metrics.IncPaymentProcessing(resultStatus)
 		timer.Observe()
 	}()
 

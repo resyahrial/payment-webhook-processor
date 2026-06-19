@@ -30,6 +30,11 @@ The app itself also exposes environment variables that shape natural failure beh
 - `DB_MAX_IDLE_CONNS`: database pool max idle connections, defaults to `5`
 - `DB_CONN_MAX_LIFETIME`: database connection lifetime, defaults to `30m`
 
+Observability now comes from two runtime sources:
+
+- app metrics at `http://localhost:8080/metrics`
+- PostgreSQL infra metrics from `postgres_exporter`, scraped by Prometheus
+
 ## Run Scenarios
 
 Run one scenario at a time so the thresholds and dashboard signals stay easy to read.
@@ -113,6 +118,8 @@ When reading k6 output, distinguish these cases:
 
 - rising `http_req_duration` and dashboard latency: the app or database is slowing down
 - rising `payment_webhook_db_wait_count_total` or `payment_webhook_db_wait_duration_seconds_total`: the database pool is saturated and requests are queueing for a connection
+- rising `payment_webhook_payment_processing_total{status="ignored"}`: out-of-order or stale events are being accepted but skipped by payment-state logic
+- rising `payment_webhook_payment_processing_total{status="failed"}`: payment processing is failing inside the service, not just at the HTTP envelope
 - many `dropped_iterations` without corresponding app/database latency growth: the load generator may be under-provisioned
 - `401 unauthorized` responses in `mixed_signatures`: expected validation failures, not load failure
 
@@ -136,5 +143,8 @@ During each run, verify the provisioned Grafana dashboard reacts:
 - `DB Pool Connections`: watch open, in-use, and idle connections converge toward the configured limits
 - `DB Pool Wait Rate`: should increase when requests queue for a DB connection
 - `DB Pool Wait Duration`: should increase when synchronous processing stalls on DB pool contention
+- `Payment Processing Outcomes`: shows `created`, `updated`, `ignored`, and `failed` result rates inside payment-state processing
+- `App CPU Usage`, `App RSS Memory`, `App Goroutines`: show whether service-side saturation is CPU, memory, or concurrency driven
+- `PostgreSQL Availability`, `PostgreSQL Connections`, `PostgreSQL Transaction Rate`: show whether the database is healthy and how hard it is being driven under load
 
 Local machine performance affects the spike scenario. If the default spike rate is too aggressive for your machine, lower `K6_SPIKE_RATE`. If it is too mild to show degradation, raise it and rerun.

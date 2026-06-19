@@ -47,6 +47,7 @@ func TestPaymentProcessorProcessCreatesPaymentForFirstEvent(t *testing.T) {
 	})
 
 	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "created"}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "created"}, 1)
 }
 
 func TestPaymentProcessorProcessUpdatesPaymentForNewerEvent(t *testing.T) {
@@ -125,6 +126,7 @@ func TestPaymentProcessorProcessIgnoresOlderEvent(t *testing.T) {
 
 	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypeOlderEventTimestamp)}, 1)
 	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "ignored"}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "ignored"}, 1)
 }
 
 func TestPaymentProcessorProcessIgnoresEqualTimestampEvent(t *testing.T) {
@@ -249,6 +251,7 @@ func TestPaymentProcessorProcessReturnsFailedResultOnRepositoryError(t *testing.
 	}
 
 	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "failed"}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "failed"}, 1)
 }
 
 func TestPaymentProcessorProcessRecordsSuspiciousTransitionWithoutChangingUpdateOutcome(t *testing.T) {
@@ -281,6 +284,7 @@ func TestPaymentProcessorProcessRecordsSuspiciousTransitionWithoutChangingUpdate
 
 	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypePaidAfterFailed)}, 1)
 	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "updated"}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "updated"}, 1)
 }
 
 func TestPaymentProcessorProcessContinuesWhenAnomalyRecordingFails(t *testing.T) {
