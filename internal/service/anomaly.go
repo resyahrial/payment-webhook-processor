@@ -38,6 +38,10 @@ func DetectAnomalies(current repository.Payment, event webhook.PaymentEvent, web
 		appendAnomaly(repository.AnomalyTypeFailedAfterPaid)
 	}
 
+	if current.Status == webhook.PaymentStatusPaid && event.PaymentStatus == webhook.PaymentStatusPending && event.EventTimestamp.After(current.StatusTimestamp) {
+		appendAnomaly(repository.AnomalyTypePendingAfterPaid)
+	}
+
 	if event.EventTimestamp.Before(current.StatusTimestamp) {
 		appendAnomaly(repository.AnomalyTypeOlderEventTimestamp)
 	}

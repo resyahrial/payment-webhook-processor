@@ -47,6 +47,7 @@ func TestPaymentProcessorProcessCreatesPaymentForFirstEvent(t *testing.T) {
 	})
 
 	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "created"}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "created"}, 1)
 }
 
 func TestPaymentProcessorProcessUpdatesPaymentForNewerEvent(t *testing.T) {
@@ -110,6 +111,9 @@ func TestPaymentProcessorProcessIgnoresOlderEvent(t *testing.T) {
 	if result.Status != PaymentProcessingStatusIgnored {
 		t.Fatalf("expected result status %q, got %q", PaymentProcessingStatusIgnored, result.Status)
 	}
+	if result.Reason != IgnoreReasonOlderTimestamp {
+		t.Fatalf("expected ignore reason %q, got %q", IgnoreReasonOlderTimestamp, result.Reason)
+	}
 
 	if repo.upsertCalls != 0 {
 		t.Fatalf("expected older event to skip upsert, got %d calls", repo.upsertCalls)
@@ -125,6 +129,8 @@ func TestPaymentProcessorProcessIgnoresOlderEvent(t *testing.T) {
 
 	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypeOlderEventTimestamp)}, 1)
 	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "ignored"}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "ignored"}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_ignored_total", map[string]string{"reason": IgnoreReasonOlderTimestamp}, 1)
 }
 
 func TestPaymentProcessorProcessIgnoresEqualTimestampEvent(t *testing.T) {
@@ -150,6 +156,9 @@ func TestPaymentProcessorProcessIgnoresEqualTimestampEvent(t *testing.T) {
 	if result.Status != PaymentProcessingStatusIgnored {
 		t.Fatalf("expected result status %q, got %q", PaymentProcessingStatusIgnored, result.Status)
 	}
+	if result.Reason != IgnoreReasonEqualTimestamp {
+		t.Fatalf("expected ignore reason %q, got %q", IgnoreReasonEqualTimestamp, result.Reason)
+	}
 
 	if repo.upsertCalls != 0 {
 		t.Fatalf("expected equal timestamp event to skip upsert, got %d calls", repo.upsertCalls)
@@ -158,6 +167,14 @@ func TestPaymentProcessorProcessIgnoresEqualTimestampEvent(t *testing.T) {
 	if anomalies.calls != 0 {
 		t.Fatalf("expected equal timestamp event to skip anomaly recording, got %d calls", anomalies.calls)
 	}
+
+	processorMetrics := appmetrics.New()
+	processor = NewPaymentProcessor(repo, anomalies, processorMetrics)
+	result, err = processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 104})
+	if err != nil {
+		t.Fatalf("process event with metrics: %v", err)
+	}
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_ignored_total", map[string]string{"reason": IgnoreReasonEqualTimestamp}, 1)
 }
 
 func TestPaymentProcessorProcessHandlesMultipleValidStatusChanges(t *testing.T) {
@@ -249,6 +266,7 @@ func TestPaymentProcessorProcessReturnsFailedResultOnRepositoryError(t *testing.
 	}
 
 	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "failed"}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "failed"}, 1)
 }
 
 func TestPaymentProcessorProcessRecordsSuspiciousTransitionWithoutChangingUpdateOutcome(t *testing.T) {
@@ -281,6 +299,38 @@ func TestPaymentProcessorProcessRecordsSuspiciousTransitionWithoutChangingUpdate
 
 	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypePaidAfterFailed)}, 1)
 	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "updated"}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "updated"}, 1)
+}
+
+func TestPaymentProcessorProcessRecordsPendingAfterPaidAnomaly(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	current := repository.Payment{
+		PaymentID:       "pay_409",
+		Status:          webhook.PaymentStatusPaid,
+		StatusTimestamp: time.Date(2026, time.June, 17, 17, 30, 0, 0, time.UTC),
+	}
+	event := paymentProcessorEvent("evt_409", current.PaymentID, webhook.EventTypePaymentPending, current.StatusTimestamp.Add(2*time.Minute))
+	repo := &stubPaymentStateRepository{payment: current}
+	anomalies := &stubAnomalyRecorder{}
+
+	processorMetrics := appmetrics.New()
+	processor := NewPaymentProcessor(repo, anomalies, processorMetrics)
+	result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 111})
+	if err != nil {
+		t.Fatalf("process event: %v", err)
+	}
+
+	if result.Status != PaymentProcessingStatusUpdated {
+		t.Fatalf("expected result status %q, got %q", PaymentProcessingStatusUpdated, result.Status)
+	}
+
+	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypePendingAfterPaid {
+		t.Fatalf("expected pending-after-paid anomaly, got %+v", anomalies.records)
+	}
+
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypePendingAfterPaid)}, 1)
 }
 
 func TestPaymentProcessorProcessContinuesWhenAnomalyRecordingFails(t *testing.T) {

@@ -16,6 +16,7 @@ type AnomalyType string
 const (
 	AnomalyTypePaidAfterFailed     AnomalyType = "paid_after_failed"
 	AnomalyTypeFailedAfterPaid     AnomalyType = "failed_after_paid"
+	AnomalyTypePendingAfterPaid    AnomalyType = "pending_after_paid"
 	AnomalyTypeOlderEventTimestamp AnomalyType = "older_event_timestamp"
 )
 

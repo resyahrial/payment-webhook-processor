@@ -1,15 +1,25 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strconv"
+	"time"
+)
 
 const defaultPort = "8080"
 const defaultEnvironment = "development"
+const defaultDBMaxOpenConns = 10
+const defaultDBMaxIdleConns = 5
+const defaultDBConnMaxLifetime = 30 * time.Minute
 
 type Config struct {
 	Port                 string
 	DatabaseURL          string
 	WebhookSigningSecret string
 	Environment          string
+	DBMaxOpenConns       int
+	DBMaxIdleConns       int
+	DBConnMaxLifetime    time.Duration
 }
 
 func Load() Config {
@@ -18,6 +28,9 @@ func Load() Config {
 		DatabaseURL:          os.Getenv("DATABASE_URL"),
 		WebhookSigningSecret: os.Getenv("WEBHOOK_SIGNING_SECRET"),
 		Environment:          firstNonEmpty(os.Getenv("APP_ENV"), os.Getenv("ENV"), defaultEnvironment),
+		DBMaxOpenConns:       intEnvOrDefault("DB_MAX_OPEN_CONNS", defaultDBMaxOpenConns),
+		DBMaxIdleConns:       intEnvOrDefault("DB_MAX_IDLE_CONNS", defaultDBMaxIdleConns),
+		DBConnMaxLifetime:    durationEnvOrDefault("DB_CONN_MAX_LIFETIME", defaultDBConnMaxLifetime),
 	}
 }
 
@@ -33,4 +46,32 @@ func firstNonEmpty(values ...string) string {
 	}
 
 	return ""
+}
+
+func intEnvOrDefault(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+
+	return parsed
+}
+
+func durationEnvOrDefault(key string, fallback time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+
+	return parsed
 }

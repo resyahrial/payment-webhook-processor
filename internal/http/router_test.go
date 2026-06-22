@@ -75,7 +75,10 @@ func TestNewRouterPropagatesRequestIDHeader(t *testing.T) {
 }
 
 func TestNewRouterServesMetricsRoute(t *testing.T) {
-	router := NewRouter(nil, appmetrics.New().Handler())
+	m := appmetrics.New()
+	m.IncWebhookRequest()
+	m.IncWebhookSuccess("processed")
+	router := NewRouter(nil, m.Handler())
 	req := httptest.NewRequest(stdhttp.MethodGet, "/metrics", nil)
 	recorder := httptest.NewRecorder()
 
@@ -91,6 +94,10 @@ func TestNewRouterServesMetricsRoute(t *testing.T) {
 
 	if !strings.Contains(recorder.Body.String(), "go_gc_duration_seconds") {
 		t.Fatalf("expected metrics payload, got %q", recorder.Body.String())
+	}
+
+	if !strings.Contains(recorder.Body.String(), "payment_webhook_requests_total") {
+		t.Fatalf("expected custom app metrics in payload, got %q", recorder.Body.String())
 	}
 }
 

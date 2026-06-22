@@ -1,5 +1,6 @@
 # payment-webhook-processor
 
+<<<<<<< HEAD
 `baseline-direct-processing` is a deliberately simple payment webhook processor that handles provider events synchronously inside the HTTP request.
 
 This branch is meant to prove two things:
@@ -271,3 +272,5 @@ Under spike load you should expect symptoms such as:
 This is the main lesson of `baseline-direct-processing`: the implementation is straightforward and observable, but direct synchronous processing does not absorb provider bursts safely.
 
 If the spike scenario is too aggressive for your machine, reduce `K6_SPIKE_RATE`. If it does not show enough degradation, raise it and rerun.
+
+The stack includes Prometheus, Grafana, and PostgreSQL exporter so load tests can be correlated with both service-level and database-level infrastructure signals.

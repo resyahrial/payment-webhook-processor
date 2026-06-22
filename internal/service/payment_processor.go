@@ -26,7 +26,13 @@ const (
 
 type PaymentProcessingResult struct {
 	Status PaymentProcessingStatus
+	Reason string
 }
+
+const (
+	IgnoreReasonOlderTimestamp = "older_timestamp"
+	IgnoreReasonEqualTimestamp = "equal_timestamp"
+)
 
 type PaymentProcessor struct {
 	repository      PaymentStateRepository
@@ -42,6 +48,7 @@ func (p *PaymentProcessor) Process(ctx context.Context, update PaymentUpdate) (P
 	resultStatus := string(PaymentProcessingStatusFailed)
 	timer := p.metrics.StartPaymentProcessingTimer(&resultStatus)
 	defer func() {
+		p.metrics.IncPaymentProcessing(resultStatus)
 		timer.Observe()
 	}()
 
@@ -62,8 +69,13 @@ func (p *PaymentProcessor) Process(ctx context.Context, update PaymentUpdate) (P
 	p.recordAnomalies(ctx, DetectAnomalies(current, update.Event, update.WebhookEventID))
 
 	if !update.Event.EventTimestamp.After(current.StatusTimestamp) {
+		ignoreReason := IgnoreReasonOlderTimestamp
+		if update.Event.EventTimestamp.Equal(current.StatusTimestamp) {
+			ignoreReason = IgnoreReasonEqualTimestamp
+		}
+		p.metrics.IncPaymentIgnored(ignoreReason)
 		resultStatus = string(PaymentProcessingStatusIgnored)
-		return PaymentProcessingResult{Status: PaymentProcessingStatusIgnored}, nil
+		return PaymentProcessingResult{Status: PaymentProcessingStatusIgnored, Reason: ignoreReason}, nil
 	}
 
 	if err := p.repository.Upsert(ctx, paymentFromEvent(update.Event)); err != nil {

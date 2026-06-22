@@ -193,7 +193,7 @@ func newRepositoryTestDatabase(t *testing.T, ctx context.Context) (*sql.DB, func
 		t.Skip("TEST_DATABASE_URL is not set")
 	}
 
-	adminDB, err := appdb.Open(ctx, baseURL)
+	adminDB, err := appdb.Open(ctx, baseURL, appdb.PoolConfig{})
 	if err != nil {
 		t.Fatalf("open admin database: %v", err)
 	}
@@ -211,7 +211,7 @@ func newRepositoryTestDatabase(t *testing.T, ctx context.Context) (*sql.DB, func
 		t.Fatalf("build schema-scoped database url: %v", err)
 	}
 
-	testDB, err := appdb.Open(ctx, testDBURL)
+	testDB, err := appdb.Open(ctx, testDBURL, appdb.PoolConfig{})
 	if err != nil {
 		_, _ = adminDB.ExecContext(ctx, fmt.Sprintf(`DROP SCHEMA IF EXISTS "%s" CASCADE`, schemaName))
 		_ = adminDB.Close()
