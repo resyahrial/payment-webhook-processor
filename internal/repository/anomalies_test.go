@@ -75,7 +75,7 @@ func TestAnomalyRepositoryRecordAllowsMultipleAnomaliesForOneEvent(t *testing.T)
 	first := Anomaly{
 		WebhookEventID: webhookEventID,
 		PaymentID:      "pay_602",
-		AnomalyType:    AnomalyTypeUnexpectedTransition,
+		AnomalyType:    AnomalyTypeInvalidTerminalTransition,
 		Details: AnomalyDetails{
 			ProviderEventID:   "evt_602",
 			CurrentStatus:     webhook.PaymentStatusPaid,

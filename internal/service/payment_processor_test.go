@@ -237,6 +237,70 @@ func TestPaymentProcessorProcessHandlesMultipleValidStatusChanges(t *testing.T) 
 	})
 }
 
+func TestPaymentProcessorProcessAllowsRequirementTransitions(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		current webhook.PaymentStatus
+		next    webhook.EventType
+	}{
+		{name: "pending to authorized", current: webhook.PaymentStatusPending, next: webhook.EventTypePaymentAuthorized},
+		{name: "pending to paid", current: webhook.PaymentStatusPending, next: webhook.EventTypePaymentPaid},
+		{name: "pending to failed", current: webhook.PaymentStatusPending, next: webhook.EventTypePaymentFailed},
+		{name: "pending to expired", current: webhook.PaymentStatusPending, next: webhook.EventTypePaymentExpired},
+		{name: "pending to cancelled", current: webhook.PaymentStatusPending, next: webhook.EventTypePaymentCancelled},
+		{name: "authorized to paid", current: webhook.PaymentStatusAuthorized, next: webhook.EventTypePaymentPaid},
+		{name: "authorized to failed", current: webhook.PaymentStatusAuthorized, next: webhook.EventTypePaymentFailed},
+		{name: "authorized to expired", current: webhook.PaymentStatusAuthorized, next: webhook.EventTypePaymentExpired},
+		{name: "authorized to cancelled", current: webhook.PaymentStatusAuthorized, next: webhook.EventTypePaymentCancelled},
+		{name: "paid to partially refunded", current: webhook.PaymentStatusPaid, next: webhook.EventTypePaymentPartiallyRefunded},
+		{name: "paid to refunded", current: webhook.PaymentStatusPaid, next: webhook.EventTypePaymentRefunded},
+		{name: "paid to disputed", current: webhook.PaymentStatusPaid, next: webhook.EventTypePaymentDisputed},
+		{name: "partially refunded to partially refunded", current: webhook.PaymentStatusPartiallyRefunded, next: webhook.EventTypePaymentPartiallyRefunded},
+		{name: "partially refunded to refunded", current: webhook.PaymentStatusPartiallyRefunded, next: webhook.EventTypePaymentRefunded},
+		{name: "partially refunded to disputed", current: webhook.PaymentStatusPartiallyRefunded, next: webhook.EventTypePaymentDisputed},
+		{name: "disputed to paid", current: webhook.PaymentStatusDisputed, next: webhook.EventTypePaymentPaid},
+		{name: "disputed to chargeback", current: webhook.PaymentStatusDisputed, next: webhook.EventTypePaymentChargeback},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			currentTimestamp := time.Date(2026, time.June, 17, 18, 0, 0, 0, time.UTC)
+			current := repository.Payment{
+				PaymentID:       "pay_405_matrix",
+				Status:          testCase.current,
+				StatusTimestamp: currentTimestamp,
+			}
+			event := paymentProcessorEvent("evt_405_matrix", current.PaymentID, testCase.next, currentTimestamp.Add(5*time.Minute))
+			repo := &stubPaymentStateRepository{payment: current}
+			anomalies := &stubAnomalyRecorder{}
+
+			processor := NewPaymentProcessor(repo, anomalies, nil)
+			result, err := processor.Process(ctx, PaymentUpdate{Event: event, WebhookEventID: 205})
+			if err != nil {
+				t.Fatalf("process event: %v", err)
+			}
+
+			if result.Status != PaymentProcessingStatusUpdated {
+				t.Fatalf("expected result status %q, got %q", PaymentProcessingStatusUpdated, result.Status)
+			}
+
+			if repo.upsertCalls != 1 {
+				t.Fatalf("expected 1 upsert call, got %d", repo.upsertCalls)
+			}
+
+			if anomalies.calls != 0 {
+				t.Fatalf("expected valid transition to skip anomaly recording, got %d calls", anomalies.calls)
+			}
+		})
+	}
+}
+
 func TestPaymentProcessorProcessReturnsFailedResultOnRepositoryError(t *testing.T) {
 	t.Parallel()
 
@@ -310,7 +374,7 @@ func TestPaymentProcessorProcessRejectsInvalidTerminalTransition(t *testing.T) {
 	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "ignored"}, 1)
 }
 
-func TestPaymentProcessorProcessAllowsUnexpectedNonTerminalTransitionAndRecordsAnomaly(t *testing.T) {
+func TestPaymentProcessorProcessRejectsInvalidNonTerminalTransition(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -330,15 +394,23 @@ func TestPaymentProcessorProcessAllowsUnexpectedNonTerminalTransitionAndRecordsA
 		t.Fatalf("process event: %v", err)
 	}
 
-	if result.Status != PaymentProcessingStatusUpdated {
-		t.Fatalf("expected result status %q, got %q", PaymentProcessingStatusUpdated, result.Status)
+	if result.Status != PaymentProcessingStatusIgnored {
+		t.Fatalf("expected result status %q, got %q", PaymentProcessingStatusIgnored, result.Status)
+	}
+	if result.Reason != IgnoreReasonInvalidTransition {
+		t.Fatalf("expected ignore reason %q, got %q", IgnoreReasonInvalidTransition, result.Reason)
 	}
 
-	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypeUnexpectedTransition {
-		t.Fatalf("expected unexpected-transition anomaly, got %+v", anomalies.records)
+	if repo.upsertCalls != 0 {
+		t.Fatalf("expected invalid transition to skip upsert, got %d calls", repo.upsertCalls)
 	}
 
-	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypeUnexpectedTransition)}, 1)
+	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypeInvalidTerminalTransition {
+		t.Fatalf("expected invalid-terminal-transition anomaly, got %+v", anomalies.records)
+	}
+
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypeInvalidTerminalTransition)}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_ignored_total", map[string]string{"reason": IgnoreReasonInvalidTransition}, 1)
 }
 
 func TestPaymentProcessorProcessContinuesWhenAnomalyRecordingFails(t *testing.T) {

@@ -39,24 +39,11 @@ func DetectAnomalies(current repository.Payment, event webhook.PaymentEvent, web
 		return anomalies
 	}
 
-	_, anomalyType, hasAnomaly := classifyTransition(current.Status, event.PaymentStatus)
-	if hasAnomaly {
-		appendAnomaly(anomalyType)
+	if allowed := isTransitionAllowed(current.Status, event.PaymentStatus); !allowed {
+		appendAnomaly(repository.AnomalyTypeInvalidTerminalTransition)
 	}
 
 	return anomalies
-}
-
-func classifyTransition(current, next webhook.PaymentStatus) (allowed bool, anomalyType repository.AnomalyType, hasAnomaly bool) {
-	if isTransitionAllowed(current, next) {
-		return true, "", false
-	}
-
-	if isTerminalStatus(current) {
-		return false, repository.AnomalyTypeInvalidTerminalTransition, true
-	}
-
-	return true, repository.AnomalyTypeUnexpectedTransition, true
 }
 
 func isTransitionAllowed(current, next webhook.PaymentStatus) bool {
@@ -71,15 +58,6 @@ func isTransitionAllowed(current, next webhook.PaymentStatus) bool {
 		return next == webhook.PaymentStatusPartiallyRefunded || next == webhook.PaymentStatusRefunded || next == webhook.PaymentStatusDisputed
 	case webhook.PaymentStatusDisputed:
 		return next == webhook.PaymentStatusPaid || next == webhook.PaymentStatusChargeback
-	default:
-		return false
-	}
-}
-
-func isTerminalStatus(status webhook.PaymentStatus) bool {
-	switch status {
-	case webhook.PaymentStatusFailed, webhook.PaymentStatusExpired, webhook.PaymentStatusCancelled, webhook.PaymentStatusRefunded, webhook.PaymentStatusChargeback:
-		return true
 	default:
 		return false
 	}
