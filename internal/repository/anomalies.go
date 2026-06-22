@@ -14,10 +14,9 @@ import (
 type AnomalyType string
 
 const (
-	AnomalyTypePaidAfterFailed     AnomalyType = "paid_after_failed"
-	AnomalyTypeFailedAfterPaid     AnomalyType = "failed_after_paid"
-	AnomalyTypePendingAfterPaid    AnomalyType = "pending_after_paid"
-	AnomalyTypeOlderEventTimestamp AnomalyType = "older_event_timestamp"
+	AnomalyTypeUnexpectedTransition      AnomalyType = "unexpected_transition"
+	AnomalyTypeInvalidTerminalTransition AnomalyType = "invalid_terminal_transition"
+	AnomalyTypeStaleEvent                AnomalyType = "stale_event"
 )
 
 type AnomalyDetails struct {

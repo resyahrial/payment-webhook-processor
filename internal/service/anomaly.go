@@ -30,21 +30,57 @@ func DetectAnomalies(current repository.Payment, event webhook.PaymentEvent, web
 		})
 	}
 
-	if current.Status == webhook.PaymentStatusFailed && event.PaymentStatus == webhook.PaymentStatusPaid && event.EventTimestamp.After(current.StatusTimestamp) {
-		appendAnomaly(repository.AnomalyTypePaidAfterFailed)
-	}
-
-	if current.Status == webhook.PaymentStatusPaid && event.PaymentStatus == webhook.PaymentStatusFailed {
-		appendAnomaly(repository.AnomalyTypeFailedAfterPaid)
-	}
-
-	if current.Status == webhook.PaymentStatusPaid && event.PaymentStatus == webhook.PaymentStatusPending && event.EventTimestamp.After(current.StatusTimestamp) {
-		appendAnomaly(repository.AnomalyTypePendingAfterPaid)
-	}
-
 	if event.EventTimestamp.Before(current.StatusTimestamp) {
-		appendAnomaly(repository.AnomalyTypeOlderEventTimestamp)
+		appendAnomaly(repository.AnomalyTypeStaleEvent)
+		return anomalies
+	}
+
+	if !event.EventTimestamp.After(current.StatusTimestamp) {
+		return anomalies
+	}
+
+	_, anomalyType, hasAnomaly := classifyTransition(current.Status, event.PaymentStatus)
+	if hasAnomaly {
+		appendAnomaly(anomalyType)
 	}
 
 	return anomalies
+}
+
+func classifyTransition(current, next webhook.PaymentStatus) (allowed bool, anomalyType repository.AnomalyType, hasAnomaly bool) {
+	if isTransitionAllowed(current, next) {
+		return true, "", false
+	}
+
+	if isTerminalStatus(current) {
+		return false, repository.AnomalyTypeInvalidTerminalTransition, true
+	}
+
+	return true, repository.AnomalyTypeUnexpectedTransition, true
+}
+
+func isTransitionAllowed(current, next webhook.PaymentStatus) bool {
+	switch current {
+	case webhook.PaymentStatusPending:
+		return next == webhook.PaymentStatusAuthorized || next == webhook.PaymentStatusPaid || next == webhook.PaymentStatusFailed || next == webhook.PaymentStatusExpired || next == webhook.PaymentStatusCancelled
+	case webhook.PaymentStatusAuthorized:
+		return next == webhook.PaymentStatusPaid || next == webhook.PaymentStatusFailed || next == webhook.PaymentStatusExpired || next == webhook.PaymentStatusCancelled
+	case webhook.PaymentStatusPaid:
+		return next == webhook.PaymentStatusPartiallyRefunded || next == webhook.PaymentStatusRefunded || next == webhook.PaymentStatusDisputed
+	case webhook.PaymentStatusPartiallyRefunded:
+		return next == webhook.PaymentStatusPartiallyRefunded || next == webhook.PaymentStatusRefunded || next == webhook.PaymentStatusDisputed
+	case webhook.PaymentStatusDisputed:
+		return next == webhook.PaymentStatusPaid || next == webhook.PaymentStatusChargeback
+	default:
+		return false
+	}
+}
+
+func isTerminalStatus(status webhook.PaymentStatus) bool {
+	switch status {
+	case webhook.PaymentStatusFailed, webhook.PaymentStatusExpired, webhook.PaymentStatusCancelled, webhook.PaymentStatusRefunded, webhook.PaymentStatusChargeback:
+		return true
+	default:
+		return false
+	}
 }

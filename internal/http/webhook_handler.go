@@ -177,12 +177,24 @@ func paymentStatusFromPayload(eventType string) (string, bool) {
 	switch eventType {
 	case string(webhook.EventTypePaymentPending):
 		return string(webhook.PaymentStatusPending), true
+	case string(webhook.EventTypePaymentAuthorized):
+		return string(webhook.PaymentStatusAuthorized), true
 	case string(webhook.EventTypePaymentPaid):
 		return string(webhook.PaymentStatusPaid), true
 	case string(webhook.EventTypePaymentFailed):
 		return string(webhook.PaymentStatusFailed), true
 	case string(webhook.EventTypePaymentExpired):
 		return string(webhook.PaymentStatusExpired), true
+	case string(webhook.EventTypePaymentCancelled):
+		return string(webhook.PaymentStatusCancelled), true
+	case string(webhook.EventTypePaymentPartiallyRefunded):
+		return string(webhook.PaymentStatusPartiallyRefunded), true
+	case string(webhook.EventTypePaymentRefunded):
+		return string(webhook.PaymentStatusRefunded), true
+	case string(webhook.EventTypePaymentDisputed):
+		return string(webhook.PaymentStatusDisputed), true
+	case string(webhook.EventTypePaymentChargeback):
+		return string(webhook.PaymentStatusChargeback), true
 	default:
 		return "", false
 	}

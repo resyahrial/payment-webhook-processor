@@ -140,7 +140,7 @@ func TestWebhookHandlerRejectsUnknownEventType(t *testing.T) {
 	secret := "top-secret"
 	processor := &stubWebhookProcessor{}
 	handler := NewWebhookHandler(secret, processor, nil, nil)
-	body := `{"provider_event_id":"evt_905","payment_id":"pay_905","event_type":"payment.refunded","event_timestamp":"2026-06-18T10:30:00Z"}`
+	body := `{"provider_event_id":"evt_905","payment_id":"pay_905","event_type":"payment.unknown","event_timestamp":"2026-06-18T10:30:00Z"}`
 
 	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(body))
 	req.Header.Set(webhook.SignatureHeader, signWebhookPayload([]byte(body), secret))
@@ -156,6 +156,43 @@ func TestWebhookHandlerRejectsUnknownEventType(t *testing.T) {
 		t.Fatalf("expected processor not to be called, got %d calls", processor.calls)
 	}
 	assertWebhookResponseStatus(t, recorder.Body.Bytes(), "invalid_payload")
+}
+
+func TestWebhookHandlerServesExpandedPaymentEventTypes(t *testing.T) {
+	t.Parallel()
+
+	secret := "top-secret"
+	testCases := []struct {
+		name   string
+		body   string
+		status string
+	}{
+		{name: "authorized", body: `{"provider_event_id":"evt_905_a","payment_id":"pay_905_a","event_type":"payment.authorized","event_timestamp":"2026-06-18T10:31:00Z"}`, status: "authorized"},
+		{name: "chargeback", body: `{"provider_event_id":"evt_905_b","payment_id":"pay_905_b","event_type":"payment.chargeback","event_timestamp":"2026-06-18T10:32:00Z"}`, status: "chargeback"},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			processor := &stubWebhookProcessor{result: service.Result{Status: service.ResultStatusProcessed}}
+			handlerMetrics := appmetrics.New()
+			handler := NewWebhookHandler(secret, processor, nil, handlerMetrics)
+
+			req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(testCase.body))
+			req.Header.Set(webhook.SignatureHeader, signWebhookPayload([]byte(testCase.body), secret))
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, req)
+
+			if recorder.Code != stdhttp.StatusOK {
+				t.Fatalf("expected status 200, got %d", recorder.Code)
+			}
+
+			assertMetricCounterValue(t, handlerMetrics, "payment_webhook_provider_events_total", map[string]string{"event_type": string(processor.events[0].EventType), "status": testCase.status}, 1)
+		})
+	}
 }
 
 func TestWebhookHandlerReturnsSuccessForDuplicateEvent(t *testing.T) {
@@ -290,6 +327,25 @@ func TestWebhookHandlerLogsInvalidSignatureSafely(t *testing.T) {
 	assertLogField(t, entry, "error_type", "invalid_signature")
 	assertLogDoesNotContain(t, logs.String(), secret)
 	assertLogDoesNotContain(t, logs.String(), signature)
+}
+
+func TestWebhookHandlerLogsDerivedStatusForExpandedEventType(t *testing.T) {
+	t.Parallel()
+
+	secret := "top-secret"
+	signature := "not-a-valid-signature"
+	body := `{"provider_event_id":"evt_log_903_b","payment_id":"pay_log_903_b","event_type":"payment.chargeback","event_timestamp":"2026-06-18T10:31:00Z"}`
+	logs := &bytes.Buffer{}
+	handler := NewRouter(NewWebhookHandler(secret, &stubWebhookProcessor{}, logging.NewJSONLogger(logs), nil), nil)
+
+	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", strings.NewReader(body))
+	req.Header.Set(webhook.SignatureHeader, signature)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	entry := decodeSingleLogEntry(t, logs)
+	assertLogField(t, entry, "payment_status", "chargeback")
 }
 
 func TestWebhookHandlerLogsInvalidPayloadSafely(t *testing.T) {

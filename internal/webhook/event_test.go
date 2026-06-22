@@ -58,10 +58,46 @@ func TestParseEventValidExpired(t *testing.T) {
 	assertEvent(t, event, "evt_126", "pay_126", EventTypePaymentExpired, PaymentStatusExpired, "2026-06-17T13:30:00Z", body)
 }
 
+func TestParseEventValidAdditionalPaymentStatuses(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name          string
+		providerEvent string
+		paymentID     string
+		eventType     EventType
+		paymentStatus PaymentStatus
+		timestamp     string
+	}{
+		{name: "authorized", providerEvent: "evt_126_a", paymentID: "pay_126_a", eventType: EventTypePaymentAuthorized, paymentStatus: PaymentStatusAuthorized, timestamp: "2026-06-17T13:35:00Z"},
+		{name: "cancelled", providerEvent: "evt_126_b", paymentID: "pay_126_b", eventType: EventTypePaymentCancelled, paymentStatus: PaymentStatusCancelled, timestamp: "2026-06-17T13:40:00Z"},
+		{name: "partially refunded", providerEvent: "evt_126_c", paymentID: "pay_126_c", eventType: EventTypePaymentPartiallyRefunded, paymentStatus: PaymentStatusPartiallyRefunded, timestamp: "2026-06-17T13:45:00Z"},
+		{name: "refunded", providerEvent: "evt_126_d", paymentID: "pay_126_d", eventType: EventTypePaymentRefunded, paymentStatus: PaymentStatusRefunded, timestamp: "2026-06-17T13:50:00Z"},
+		{name: "disputed", providerEvent: "evt_126_e", paymentID: "pay_126_e", eventType: EventTypePaymentDisputed, paymentStatus: PaymentStatusDisputed, timestamp: "2026-06-17T13:55:00Z"},
+		{name: "chargeback", providerEvent: "evt_126_f", paymentID: "pay_126_f", eventType: EventTypePaymentChargeback, paymentStatus: PaymentStatusChargeback, timestamp: "2026-06-17T14:00:00Z"},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			body := []byte(`{"provider_event_id":"` + testCase.providerEvent + `","payment_id":"` + testCase.paymentID + `","event_type":"` + string(testCase.eventType) + `","event_timestamp":"` + testCase.timestamp + `"}`)
+
+			event, err := ParseEvent(body)
+			if err != nil {
+				t.Fatalf("expected valid event, got error %v", err)
+			}
+
+			assertEvent(t, event, testCase.providerEvent, testCase.paymentID, testCase.eventType, testCase.paymentStatus, testCase.timestamp, body)
+		})
+	}
+}
+
 func TestParseEventRejectsUnknownEventType(t *testing.T) {
 	t.Parallel()
 
-	body := []byte(`{"provider_event_id":"evt_127","payment_id":"pay_127","event_type":"payment.refunded","event_timestamp":"2026-06-17T14:30:00Z"}`)
+	body := []byte(`{"provider_event_id":"evt_127","payment_id":"pay_127","event_type":"payment.unknown","event_timestamp":"2026-06-17T14:30:00Z"}`)
 
 	_, err := ParseEvent(body)
 	if !errors.Is(err, ErrUnknownEventType) {

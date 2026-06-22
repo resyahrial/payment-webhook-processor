@@ -123,11 +123,11 @@ func TestPaymentProcessorProcessIgnoresOlderEvent(t *testing.T) {
 		t.Fatalf("expected older event anomaly to be recorded once, got %d calls", anomalies.calls)
 	}
 
-	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypeOlderEventTimestamp {
+	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypeStaleEvent {
 		t.Fatalf("expected older timestamp anomaly, got %+v", anomalies.records)
 	}
 
-	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypeOlderEventTimestamp)}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypeStaleEvent)}, 1)
 	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "ignored"}, 1)
 	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "ignored"}, 1)
 	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_ignored_total", map[string]string{"reason": IgnoreReasonOlderTimestamp}, 1)
@@ -187,8 +187,8 @@ func TestPaymentProcessorProcessHandlesMultipleValidStatusChanges(t *testing.T) 
 	processor := NewPaymentProcessor(repo, anomalies, nil)
 
 	firstEvent := paymentProcessorEvent("evt_405_a", "pay_405", webhook.EventTypePaymentPending, initialTimestamp)
-	secondEvent := paymentProcessorEvent("evt_405_b", "pay_405", webhook.EventTypePaymentPaid, initialTimestamp.Add(5*time.Minute))
-	thirdEvent := paymentProcessorEvent("evt_405_c", "pay_405", webhook.EventTypePaymentExpired, initialTimestamp.Add(10*time.Minute))
+	secondEvent := paymentProcessorEvent("evt_405_b", "pay_405", webhook.EventTypePaymentAuthorized, initialTimestamp.Add(5*time.Minute))
+	thirdEvent := paymentProcessorEvent("evt_405_c", "pay_405", webhook.EventTypePaymentPaid, initialTimestamp.Add(10*time.Minute))
 
 	firstResult, err := processor.Process(ctx, PaymentUpdate{Event: firstEvent, WebhookEventID: 105})
 	if err != nil {
@@ -269,7 +269,7 @@ func TestPaymentProcessorProcessReturnsFailedResultOnRepositoryError(t *testing.
 	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "failed"}, 1)
 }
 
-func TestPaymentProcessorProcessRecordsSuspiciousTransitionWithoutChangingUpdateOutcome(t *testing.T) {
+func TestPaymentProcessorProcessRejectsInvalidTerminalTransition(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -289,20 +289,28 @@ func TestPaymentProcessorProcessRecordsSuspiciousTransitionWithoutChangingUpdate
 		t.Fatalf("process event: %v", err)
 	}
 
-	if result.Status != PaymentProcessingStatusUpdated {
-		t.Fatalf("expected result status %q, got %q", PaymentProcessingStatusUpdated, result.Status)
+	if result.Status != PaymentProcessingStatusIgnored {
+		t.Fatalf("expected result status %q, got %q", PaymentProcessingStatusIgnored, result.Status)
+	}
+	if result.Reason != IgnoreReasonInvalidTransition {
+		t.Fatalf("expected ignore reason %q, got %q", IgnoreReasonInvalidTransition, result.Reason)
 	}
 
-	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypePaidAfterFailed {
-		t.Fatalf("expected paid-after-failed anomaly, got %+v", anomalies.records)
+	if repo.upsertCalls != 0 {
+		t.Fatalf("expected invalid terminal transition to skip upsert, got %d calls", repo.upsertCalls)
 	}
 
-	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypePaidAfterFailed)}, 1)
-	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "updated"}, 1)
-	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "updated"}, 1)
+	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypeInvalidTerminalTransition {
+		t.Fatalf("expected invalid-terminal-transition anomaly, got %+v", anomalies.records)
+	}
+
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypeInvalidTerminalTransition)}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_ignored_total", map[string]string{"reason": IgnoreReasonInvalidTransition}, 1)
+	assertProcessorHistogramCount(t, processorMetrics, "payment_webhook_processing_duration_seconds", map[string]string{"status": "ignored"}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_payment_processing_total", map[string]string{"status": "ignored"}, 1)
 }
 
-func TestPaymentProcessorProcessRecordsPendingAfterPaidAnomaly(t *testing.T) {
+func TestPaymentProcessorProcessAllowsUnexpectedNonTerminalTransitionAndRecordsAnomaly(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -326,11 +334,11 @@ func TestPaymentProcessorProcessRecordsPendingAfterPaidAnomaly(t *testing.T) {
 		t.Fatalf("expected result status %q, got %q", PaymentProcessingStatusUpdated, result.Status)
 	}
 
-	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypePendingAfterPaid {
-		t.Fatalf("expected pending-after-paid anomaly, got %+v", anomalies.records)
+	if len(anomalies.records) != 1 || anomalies.records[0].AnomalyType != repository.AnomalyTypeUnexpectedTransition {
+		t.Fatalf("expected unexpected-transition anomaly, got %+v", anomalies.records)
 	}
 
-	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypePendingAfterPaid)}, 1)
+	assertProcessorCounterValue(t, processorMetrics, "payment_webhook_anomalies_total", map[string]string{"anomaly_type": string(repository.AnomalyTypeUnexpectedTransition)}, 1)
 }
 
 func TestPaymentProcessorProcessContinuesWhenAnomalyRecordingFails(t *testing.T) {
@@ -413,12 +421,24 @@ func paymentStatusFromEventType(eventType webhook.EventType) (webhook.PaymentSta
 	switch eventType {
 	case webhook.EventTypePaymentPending:
 		return webhook.PaymentStatusPending, nil
+	case webhook.EventTypePaymentAuthorized:
+		return webhook.PaymentStatusAuthorized, nil
 	case webhook.EventTypePaymentPaid:
 		return webhook.PaymentStatusPaid, nil
 	case webhook.EventTypePaymentFailed:
 		return webhook.PaymentStatusFailed, nil
 	case webhook.EventTypePaymentExpired:
 		return webhook.PaymentStatusExpired, nil
+	case webhook.EventTypePaymentCancelled:
+		return webhook.PaymentStatusCancelled, nil
+	case webhook.EventTypePaymentPartiallyRefunded:
+		return webhook.PaymentStatusPartiallyRefunded, nil
+	case webhook.EventTypePaymentRefunded:
+		return webhook.PaymentStatusRefunded, nil
+	case webhook.EventTypePaymentDisputed:
+		return webhook.PaymentStatusDisputed, nil
+	case webhook.EventTypePaymentChargeback:
+		return webhook.PaymentStatusChargeback, nil
 	default:
 		return "", errors.New("unsupported event type")
 	}
