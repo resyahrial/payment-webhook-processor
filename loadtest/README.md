@@ -23,6 +23,8 @@ The script reads these environment variables:
 - `K6_NOISY_SPIKE_PEAK_RATE`: peak requests/second for the noisy-neighbor spike stream, defaults to `200`
 - `K6_HOT_PAYMENT_RATE`: requests/second for the hot-payments scenario, defaults to `150`
 - `K6_HOT_PAYMENT_SET_SIZE`: number of shared payment IDs in the hot-payments scenario, defaults to `5`
+- `K6_OUT_OF_ORDER_RATE`: requests/second for the out-of-order race scenario, defaults to `300`
+- `K6_OUT_OF_ORDER_PAYMENT_SET_SIZE`: number of shared payment IDs in the out-of-order race scenario, defaults to `20`
 
 The app itself also exposes environment variables that shape natural failure behavior:
 
@@ -81,6 +83,12 @@ Hot payments:
 k6 run -e SCENARIO=hot_payments loadtest/payment_webhooks.js
 ```
 
+Out-of-order race:
+
+```bash
+k6 run -e SCENARIO=out_of_order_race loadtest/payment_webhooks.js
+```
+
 Example with explicit target and higher spike rate:
 
 ```bash
@@ -102,6 +110,7 @@ K6_CAPACITY_START_RATE=10 K6_CAPACITY_PEAK_RATE=120 k6 run -e SCENARIO=capacity_
 - `capacity_ramp`: should reveal the request rate where direct synchronous processing breaches the `5s` provider-facing response budget
 - `noisy_neighbor`: the baseline traffic should start to slow down while the noisy spike stream is active
 - `hot_payments`: should raise webhook latency and database pressure by concentrating many events on a small set of payment IDs
+- `out_of_order_race`: should increase `ignored` outcomes and anomaly counts by sending concurrent, timestamp-skewed states for the same payment IDs
 
 ## Failure Interpretation
 
@@ -113,6 +122,7 @@ Use the scenarios to answer different questions:
 - `capacity_ramp`: where is the natural breaking point for the current architecture?
 - `noisy_neighbor`: does one traffic source degrade another concurrent source?
 - `hot_payments`: does resource contention around shared payment records amplify pressure?
+- `out_of_order_race`: do same-payment concurrent deliveries produce stale-event ignores or suspicious transitions under load?
 
 When reading k6 output, distinguish these cases:
 
@@ -120,6 +130,8 @@ When reading k6 output, distinguish these cases:
 - rising `payment_webhook_db_wait_count_total` or `payment_webhook_db_wait_duration_seconds_total`: the database pool is saturated and requests are queueing for a connection
 - rising `payment_webhook_payment_processing_total{status="ignored"}`: out-of-order or stale events are being accepted but skipped by payment-state logic
 - rising `payment_webhook_payment_processing_total{status="failed"}`: payment processing is failing inside the service, not just at the HTTP envelope
+- rising `payment_webhook_anomalies_total{anomaly_type="older_event_timestamp"}`: stale timestamps are arriving after newer state was already persisted
+- rising `payment_webhook_anomalies_total{anomaly_type="paid_after_failed"}` or `failed_after_paid`: concurrent state races are producing suspicious transitions worth operational review
 - many `dropped_iterations` without corresponding app/database latency growth: the load generator may be under-provisioned
 - `401 unauthorized` responses in `mixed_signatures`: expected validation failures, not load failure
 
@@ -144,6 +156,7 @@ During each run, verify the provisioned Grafana dashboard reacts:
 - `DB Pool Wait Rate`: should increase when requests queue for a DB connection
 - `DB Pool Wait Duration`: should increase when synchronous processing stalls on DB pool contention
 - `Payment Processing Outcomes`: shows `created`, `updated`, `ignored`, and `failed` result rates inside payment-state processing
+- `Ignored Outcome Rate` and `Anomaly Rate by Type`: should react during the out-of-order race scenario
 - `App CPU Usage`, `App RSS Memory`, `App Goroutines`: show whether service-side saturation is CPU, memory, or concurrency driven
 - `PostgreSQL Availability`, `PostgreSQL Connections`, `PostgreSQL Transaction Rate`: show whether the database is healthy and how hard it is being driven under load
 

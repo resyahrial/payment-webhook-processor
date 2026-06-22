@@ -15,7 +15,7 @@ const processedResponses = new Counter('processed_responses');
 const duplicateResponses = new Counter('duplicate_responses');
 const unauthorizedResponses = new Counter('unauthorized_responses');
 const unexpectedResponses = new Counter('unexpected_responses');
-const supportedScenarioNames = ['normal', 'duplicate', 'mixed_signatures', 'spike', 'capacity_ramp', 'noisy_neighbor', 'hot_payments'];
+const supportedScenarioNames = ['normal', 'duplicate', 'mixed_signatures', 'spike', 'capacity_ramp', 'noisy_neighbor', 'hot_payments', 'out_of_order_race'];
 
 const scenarioProfiles = {
   normal: {
@@ -49,8 +49,8 @@ const scenarioProfiles = {
     duration: '30s',
     timeUnit: '1s',
     rate: integerEnv('K6_SPIKE_RATE', 2000),
-    preAllocatedVUs: 25,
-    maxVUs: 120,
+    preAllocatedVUs: 80,
+    maxVUs: 240,
   },
   capacity_ramp: {
     executor: 'ramping-arrival-rate',
@@ -67,8 +67,17 @@ const scenarioProfiles = {
     duration: '45s',
     timeUnit: '1s',
     rate: integerEnv('K6_HOT_PAYMENT_RATE', 150),
-    preAllocatedVUs: 40,
-    maxVUs: 200,
+    preAllocatedVUs: 60,
+    maxVUs: 240,
+  },
+  out_of_order_race: {
+    executor: 'constant-arrival-rate',
+    exec: 'runOutOfOrderRaceScenario',
+    duration: '45s',
+    timeUnit: '1s',
+    rate: integerEnv('K6_OUT_OF_ORDER_RATE', 300),
+    preAllocatedVUs: 90,
+    maxVUs: 320,
   },
 };
 
@@ -261,6 +270,28 @@ export function runHotPaymentsScenario(data) {
   recordOutcome(response, status, passed);
 }
 
+export function runOutOfOrderRaceScenario(data) {
+  const raceEvent = outOfOrderEventForIteration(data.runID);
+  const response = sendWebhookRequest({
+    providerEventID: raceEvent.providerEventID,
+    paymentID: raceEvent.paymentID,
+    eventType: raceEvent.eventType,
+    validSignature: true,
+    trafficStream: 'race',
+    eventTimestamp: raceEvent.eventTimestamp,
+  });
+
+  const body = response.json();
+  const status = body && body.status;
+
+  const passed = check(response, {
+    'out_of_order_race returns 200 or 500': (res) => res.status === 200 || res.status === 500,
+    'out_of_order_race returns processed or internal_error': () => status === 'processed' || status === 'internal_error',
+  });
+
+  recordOutcome(response, status, passed);
+}
+
 function thresholdsFor(scenarioName) {
   const common = {
     checks: ['rate>0.99'],
@@ -320,6 +351,14 @@ function thresholdsFor(scenarioName) {
         processed_responses: ['count>0'],
         unexpected_responses: ['count==0'],
       };
+    case 'out_of_order_race':
+      return {
+        checks: ['rate>0.95'],
+        http_req_duration: [`p(95)<${providerTimeoutMs}`],
+        http_req_failed: ['rate<0.35'],
+        processed_responses: ['count>0'],
+        unexpected_responses: ['count==0'],
+      };
     default:
       return common;
   }
@@ -364,12 +403,12 @@ function scenariosFor(scenarioName) {
   };
 }
 
-function sendWebhookRequest({ providerEventID, paymentID, eventType, validSignature, trafficStream = 'primary' }) {
+function sendWebhookRequest({ providerEventID, paymentID, eventType, validSignature, trafficStream = 'primary', eventTimestamp = new Date().toISOString() }) {
   const payload = JSON.stringify({
     provider_event_id: providerEventID,
     payment_id: paymentID,
     event_type: eventType,
-    event_timestamp: new Date().toISOString(),
+    event_timestamp: eventTimestamp,
   });
 
   const signature = validSignature ? signPayload(payload) : 'invalid-signature';
@@ -412,6 +451,30 @@ function hotPaymentID(runID) {
   const setSize = integerEnv('K6_HOT_PAYMENT_SET_SIZE', 5);
   return `pay_hot_shared_${runID}_${exec.scenario.iterationInTest % setSize}`;
 }
+
+function outOfOrderEventForIteration(runID) {
+  const setSize = integerEnv('K6_OUT_OF_ORDER_PAYMENT_SET_SIZE', 20);
+  const paymentIndex = exec.scenario.iterationInTest % setSize;
+  const sequenceIndex = Math.floor(exec.scenario.iterationInTest / setSize) % outOfOrderTemplates.length;
+  const template = outOfOrderTemplates[sequenceIndex];
+  const paymentID = `pay_race_shared_${runID}_${paymentIndex}`;
+  const providerEventID = `evt_race_${template.eventKey}_${runID}_${paymentIndex}_${exec.scenario.iterationInTest}`;
+  const baseTimestampMs = Date.parse('2026-06-19T00:00:00.000Z') + paymentIndex * 1000;
+
+  return {
+    providerEventID,
+    paymentID,
+    eventType: template.eventType,
+    eventTimestamp: new Date(baseTimestampMs + template.offsetSeconds * 1000).toISOString(),
+  };
+}
+
+const outOfOrderTemplates = [
+  { eventKey: 'paid_latest', eventType: 'payment.paid', offsetSeconds: 180 },
+  { eventKey: 'pending_original', eventType: 'payment.pending', offsetSeconds: 0 },
+  { eventKey: 'failed_mid', eventType: 'payment.failed', offsetSeconds: 120 },
+  { eventKey: 'pending_late_old', eventType: 'payment.pending', offsetSeconds: 30 },
+];
 
 function capacityRampStages(peakRate) {
   const quarter = Math.max(1, Math.floor(peakRate / 4));

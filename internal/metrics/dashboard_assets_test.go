@@ -117,6 +117,8 @@ func TestGrafanaDashboardContainsRequiredPanelsAndQueries(t *testing.T) {
 		"DB Pool Wait Rate",
 		"DB Pool Wait Duration",
 		"Payment Processing Outcomes",
+		"Ignored Outcome Rate",
+		"Anomaly Rate by Type",
 		"App CPU Usage",
 		"App RSS Memory",
 		"App Goroutines",
@@ -164,6 +166,8 @@ func TestGrafanaDashboardContainsRequiredPanelsAndQueries(t *testing.T) {
 	assertPanelQueryContains(t, panels, "DB Pool Wait Rate", "payment_webhook_db_wait_count_total")
 	assertPanelQueryContains(t, panels, "DB Pool Wait Duration", "payment_webhook_db_wait_duration_seconds_total")
 	assertPanelQueryContains(t, panels, "Payment Processing Outcomes", "payment_webhook_payment_processing_total")
+	assertPanelQueryContains(t, panels, "Ignored Outcome Rate", "payment_webhook_payment_processing_total{status=\"ignored\"}")
+	assertPanelQueryContains(t, panels, "Anomaly Rate by Type", "payment_webhook_anomalies_total")
 	assertPanelQueryContains(t, panels, "App CPU Usage", "process_cpu_seconds_total")
 	assertPanelQueryContains(t, panels, "App RSS Memory", "process_resident_memory_bytes")
 	assertPanelQueryContains(t, panels, "App Goroutines", "go_goroutines")
