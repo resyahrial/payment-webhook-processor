@@ -14,7 +14,6 @@ import (
 type AnomalyType string
 
 const (
-	AnomalyTypeUnexpectedTransition      AnomalyType = "unexpected_transition"
 	AnomalyTypeInvalidTerminalTransition AnomalyType = "invalid_terminal_transition"
 	AnomalyTypeStaleEvent                AnomalyType = "stale_event"
 )

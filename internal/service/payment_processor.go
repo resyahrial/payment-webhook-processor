@@ -79,8 +79,7 @@ func (p *PaymentProcessor) Process(ctx context.Context, update PaymentUpdate) (P
 		return PaymentProcessingResult{Status: PaymentProcessingStatusIgnored, Reason: ignoreReason}, nil
 	}
 
-	allowed, _, _ := classifyTransition(current.Status, update.Event.PaymentStatus)
-	if !allowed {
+	if !isTransitionAllowed(current.Status, update.Event.PaymentStatus) {
 		p.metrics.IncPaymentIgnored(IgnoreReasonInvalidTransition)
 		resultStatus = string(PaymentProcessingStatusIgnored)
 		return PaymentProcessingResult{Status: PaymentProcessingStatusIgnored, Reason: IgnoreReasonInvalidTransition}, nil

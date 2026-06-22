@@ -37,7 +37,7 @@ func TestDetectAnomaliesRecordsStaleEvent(t *testing.T) {
 	})
 }
 
-func TestDetectAnomaliesRecordsUnexpectedNonTerminalTransition(t *testing.T) {
+func TestDetectAnomaliesRecordsInvalidTransition(t *testing.T) {
 	t.Parallel()
 
 	current := repository.Payment{
@@ -55,7 +55,7 @@ func TestDetectAnomaliesRecordsUnexpectedNonTerminalTransition(t *testing.T) {
 	assertAnomalyRecord(t, anomalies[0], repository.Anomaly{
 		WebhookEventID: 42,
 		PaymentID:      current.PaymentID,
-		AnomalyType:    repository.AnomalyTypeUnexpectedTransition,
+		AnomalyType:    repository.AnomalyTypeInvalidTerminalTransition,
 		Details: repository.AnomalyDetails{
 			ProviderEventID:   event.ProviderEventID,
 			CurrentStatus:     current.Status,
