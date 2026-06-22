@@ -413,12 +413,24 @@ func paymentStatusFromEventType(eventType webhook.EventType) (webhook.PaymentSta
 	switch eventType {
 	case webhook.EventTypePaymentPending:
 		return webhook.PaymentStatusPending, nil
+	case webhook.EventTypePaymentAuthorized:
+		return webhook.PaymentStatusAuthorized, nil
 	case webhook.EventTypePaymentPaid:
 		return webhook.PaymentStatusPaid, nil
 	case webhook.EventTypePaymentFailed:
 		return webhook.PaymentStatusFailed, nil
 	case webhook.EventTypePaymentExpired:
 		return webhook.PaymentStatusExpired, nil
+	case webhook.EventTypePaymentCancelled:
+		return webhook.PaymentStatusCancelled, nil
+	case webhook.EventTypePaymentPartiallyRefunded:
+		return webhook.PaymentStatusPartiallyRefunded, nil
+	case webhook.EventTypePaymentRefunded:
+		return webhook.PaymentStatusRefunded, nil
+	case webhook.EventTypePaymentDisputed:
+		return webhook.PaymentStatusDisputed, nil
+	case webhook.EventTypePaymentChargeback:
+		return webhook.PaymentStatusChargeback, nil
 	default:
 		return "", errors.New("unsupported event type")
 	}

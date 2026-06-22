@@ -11,19 +11,31 @@ import (
 type EventType string
 
 const (
-	EventTypePaymentPending EventType = "payment.pending"
-	EventTypePaymentPaid    EventType = "payment.paid"
-	EventTypePaymentFailed  EventType = "payment.failed"
-	EventTypePaymentExpired EventType = "payment.expired"
+	EventTypePaymentPending           EventType = "payment.pending"
+	EventTypePaymentAuthorized       EventType = "payment.authorized"
+	EventTypePaymentPaid             EventType = "payment.paid"
+	EventTypePaymentFailed           EventType = "payment.failed"
+	EventTypePaymentExpired          EventType = "payment.expired"
+	EventTypePaymentCancelled        EventType = "payment.cancelled"
+	EventTypePaymentPartiallyRefunded EventType = "payment.partially_refunded"
+	EventTypePaymentRefunded         EventType = "payment.refunded"
+	EventTypePaymentDisputed         EventType = "payment.disputed"
+	EventTypePaymentChargeback       EventType = "payment.chargeback"
 )
 
 type PaymentStatus string
 
 const (
-	PaymentStatusPending PaymentStatus = "pending"
-	PaymentStatusPaid    PaymentStatus = "paid"
-	PaymentStatusFailed  PaymentStatus = "failed"
-	PaymentStatusExpired PaymentStatus = "expired"
+	PaymentStatusPending           PaymentStatus = "pending"
+	PaymentStatusAuthorized        PaymentStatus = "authorized"
+	PaymentStatusPaid              PaymentStatus = "paid"
+	PaymentStatusFailed            PaymentStatus = "failed"
+	PaymentStatusExpired           PaymentStatus = "expired"
+	PaymentStatusCancelled         PaymentStatus = "cancelled"
+	PaymentStatusPartiallyRefunded PaymentStatus = "partially_refunded"
+	PaymentStatusRefunded          PaymentStatus = "refunded"
+	PaymentStatusDisputed          PaymentStatus = "disputed"
+	PaymentStatusChargeback        PaymentStatus = "chargeback"
 )
 
 var (
@@ -102,12 +114,24 @@ func mapEventTypeToStatus(eventType EventType) (PaymentStatus, error) {
 	switch eventType {
 	case EventTypePaymentPending:
 		return PaymentStatusPending, nil
+	case EventTypePaymentAuthorized:
+		return PaymentStatusAuthorized, nil
 	case EventTypePaymentPaid:
 		return PaymentStatusPaid, nil
 	case EventTypePaymentFailed:
 		return PaymentStatusFailed, nil
 	case EventTypePaymentExpired:
 		return PaymentStatusExpired, nil
+	case EventTypePaymentCancelled:
+		return PaymentStatusCancelled, nil
+	case EventTypePaymentPartiallyRefunded:
+		return PaymentStatusPartiallyRefunded, nil
+	case EventTypePaymentRefunded:
+		return PaymentStatusRefunded, nil
+	case EventTypePaymentDisputed:
+		return PaymentStatusDisputed, nil
+	case EventTypePaymentChargeback:
+		return PaymentStatusChargeback, nil
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnknownEventType, eventType)
 	}

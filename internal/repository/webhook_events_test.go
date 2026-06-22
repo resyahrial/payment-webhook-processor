@@ -115,9 +115,15 @@ func TestWebhookEventRepositoryInsertSupportsAllEventTypes(t *testing.T) {
 		eventType webhook.EventType
 	}{
 		{name: "pending", eventType: webhook.EventTypePaymentPending},
+		{name: "authorized", eventType: webhook.EventTypePaymentAuthorized},
 		{name: "paid", eventType: webhook.EventTypePaymentPaid},
 		{name: "failed", eventType: webhook.EventTypePaymentFailed},
 		{name: "expired", eventType: webhook.EventTypePaymentExpired},
+		{name: "cancelled", eventType: webhook.EventTypePaymentCancelled},
+		{name: "partially_refunded", eventType: webhook.EventTypePaymentPartiallyRefunded},
+		{name: "refunded", eventType: webhook.EventTypePaymentRefunded},
+		{name: "disputed", eventType: webhook.EventTypePaymentDisputed},
+		{name: "chargeback", eventType: webhook.EventTypePaymentChargeback},
 	}
 
 	for index, testCase := range testCases {
