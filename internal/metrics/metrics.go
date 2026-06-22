@@ -23,6 +23,7 @@ const meterName = "payment-webhook-processor/internal/metrics"
 var (
 	resultKey      = attribute.Key("result")
 	statusKey      = attribute.Key("status")
+	reasonKey      = attribute.Key("reason")
 	operationKey   = attribute.Key("operation")
 	eventTypeKey   = attribute.Key("event_type")
 	anomalyTypeKey = attribute.Key("anomaly_type")
@@ -40,6 +41,7 @@ type Metrics struct {
 	webhookAnomaliesTotal     otelmetric.Int64Counter
 	providerEventsTotal       otelmetric.Int64Counter
 	paymentProcessingTotal    otelmetric.Int64Counter
+	paymentIgnoredTotal       otelmetric.Int64Counter
 	webhookResponseDuration   otelmetric.Float64Histogram
 	databaseWriteDuration     otelmetric.Float64Histogram
 	paymentProcessingDuration otelmetric.Float64Histogram
@@ -116,6 +118,10 @@ func newWithRegistry(registry *prometheus.Registry) *Metrics {
 	if err != nil {
 		panic(err)
 	}
+	paymentIgnoredTotal, err := meter.Int64Counter("payment_ignored", otelmetric.WithDescription("Total number of ignored payment events by reason."))
+	if err != nil {
+		panic(err)
+	}
 	webhookResponseDuration, err := meter.Float64Histogram("response.duration", otelmetric.WithDescription("Webhook response latency in seconds."), otelmetric.WithUnit("s"))
 	if err != nil {
 		panic(err)
@@ -160,6 +166,7 @@ func newWithRegistry(registry *prometheus.Registry) *Metrics {
 		webhookAnomaliesTotal:     webhookAnomaliesTotal,
 		providerEventsTotal:       providerEventsTotal,
 		paymentProcessingTotal:    paymentProcessingTotal,
+		paymentIgnoredTotal:       paymentIgnoredTotal,
 		webhookResponseDuration:   webhookResponseDuration,
 		databaseWriteDuration:     databaseWriteDuration,
 		paymentProcessingDuration: paymentProcessingDuration,
@@ -282,6 +289,14 @@ func (m *Metrics) IncPaymentProcessing(status string) {
 	}
 
 	m.paymentProcessingTotal.Add(context.Background(), 1, otelmetric.WithAttributes(statusKey.String(labelValue(status))))
+}
+
+func (m *Metrics) IncPaymentIgnored(reason string) {
+	if m == nil {
+		return
+	}
+
+	m.paymentIgnoredTotal.Add(context.Background(), 1, otelmetric.WithAttributes(reasonKey.String(labelValue(reason))))
 }
 
 func (m *Metrics) ObserveWebhookResponseDuration(result string, duration time.Duration) {

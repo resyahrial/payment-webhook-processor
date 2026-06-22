@@ -473,6 +473,7 @@ const outOfOrderTemplates = [
   { eventKey: 'paid_latest', eventType: 'payment.paid', offsetSeconds: 180 },
   { eventKey: 'pending_original', eventType: 'payment.pending', offsetSeconds: 0 },
   { eventKey: 'failed_mid', eventType: 'payment.failed', offsetSeconds: 120 },
+  { eventKey: 'pending_after_paid', eventType: 'payment.pending', offsetSeconds: 240 },
   { eventKey: 'pending_late_old', eventType: 'payment.pending', offsetSeconds: 30 },
 ];
 
