@@ -30,8 +30,9 @@ type PaymentProcessingResult struct {
 }
 
 const (
-	IgnoreReasonOlderTimestamp = "older_timestamp"
-	IgnoreReasonEqualTimestamp = "equal_timestamp"
+	IgnoreReasonOlderTimestamp    = "older_timestamp"
+	IgnoreReasonEqualTimestamp    = "equal_timestamp"
+	IgnoreReasonInvalidTransition = "invalid_terminal_transition"
 )
 
 type PaymentProcessor struct {
@@ -76,6 +77,13 @@ func (p *PaymentProcessor) Process(ctx context.Context, update PaymentUpdate) (P
 		p.metrics.IncPaymentIgnored(ignoreReason)
 		resultStatus = string(PaymentProcessingStatusIgnored)
 		return PaymentProcessingResult{Status: PaymentProcessingStatusIgnored, Reason: ignoreReason}, nil
+	}
+
+	allowed, _, _ := classifyTransition(current.Status, update.Event.PaymentStatus)
+	if !allowed {
+		p.metrics.IncPaymentIgnored(IgnoreReasonInvalidTransition)
+		resultStatus = string(PaymentProcessingStatusIgnored)
+		return PaymentProcessingResult{Status: PaymentProcessingStatusIgnored, Reason: IgnoreReasonInvalidTransition}, nil
 	}
 
 	if err := p.repository.Upsert(ctx, paymentFromEvent(update.Event)); err != nil {

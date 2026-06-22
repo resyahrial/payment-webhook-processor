@@ -12,15 +12,15 @@ type EventType string
 
 const (
 	EventTypePaymentPending           EventType = "payment.pending"
-	EventTypePaymentAuthorized       EventType = "payment.authorized"
-	EventTypePaymentPaid             EventType = "payment.paid"
-	EventTypePaymentFailed           EventType = "payment.failed"
-	EventTypePaymentExpired          EventType = "payment.expired"
-	EventTypePaymentCancelled        EventType = "payment.cancelled"
+	EventTypePaymentAuthorized        EventType = "payment.authorized"
+	EventTypePaymentPaid              EventType = "payment.paid"
+	EventTypePaymentFailed            EventType = "payment.failed"
+	EventTypePaymentExpired           EventType = "payment.expired"
+	EventTypePaymentCancelled         EventType = "payment.cancelled"
 	EventTypePaymentPartiallyRefunded EventType = "payment.partially_refunded"
-	EventTypePaymentRefunded         EventType = "payment.refunded"
-	EventTypePaymentDisputed         EventType = "payment.disputed"
-	EventTypePaymentChargeback       EventType = "payment.chargeback"
+	EventTypePaymentRefunded          EventType = "payment.refunded"
+	EventTypePaymentDisputed          EventType = "payment.disputed"
+	EventTypePaymentChargeback        EventType = "payment.chargeback"
 )
 
 type PaymentStatus string

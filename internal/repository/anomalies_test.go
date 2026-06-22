@@ -34,7 +34,7 @@ func TestAnomalyRepositoryRecordStoresAnomaly(t *testing.T) {
 	expected := Anomaly{
 		WebhookEventID: webhookEventID,
 		PaymentID:      "pay_601",
-		AnomalyType:    AnomalyTypeOlderEventTimestamp,
+		AnomalyType:    AnomalyTypeStaleEvent,
 		Details: AnomalyDetails{
 			ProviderEventID:   "evt_601",
 			CurrentStatus:     webhook.PaymentStatusPaid,
@@ -75,7 +75,7 @@ func TestAnomalyRepositoryRecordAllowsMultipleAnomaliesForOneEvent(t *testing.T)
 	first := Anomaly{
 		WebhookEventID: webhookEventID,
 		PaymentID:      "pay_602",
-		AnomalyType:    AnomalyTypeFailedAfterPaid,
+		AnomalyType:    AnomalyTypeUnexpectedTransition,
 		Details: AnomalyDetails{
 			ProviderEventID:   "evt_602",
 			CurrentStatus:     webhook.PaymentStatusPaid,
@@ -85,7 +85,7 @@ func TestAnomalyRepositoryRecordAllowsMultipleAnomaliesForOneEvent(t *testing.T)
 		},
 	}
 	second := first
-	second.AnomalyType = AnomalyTypeOlderEventTimestamp
+	second.AnomalyType = AnomalyTypeStaleEvent
 
 	if err := repo.Record(ctx, first); err != nil {
 		t.Fatalf("record first anomaly: %v", err)

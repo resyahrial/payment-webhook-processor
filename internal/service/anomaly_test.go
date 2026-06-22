@@ -8,15 +8,15 @@ import (
 	"payment-webhook-processor/internal/webhook"
 )
 
-func TestDetectAnomaliesRecordsPaidAfterFailed(t *testing.T) {
+func TestDetectAnomaliesRecordsStaleEvent(t *testing.T) {
 	t.Parallel()
 
 	current := repository.Payment{
 		PaymentID:       "pay_501",
-		Status:          webhook.PaymentStatusFailed,
+		Status:          webhook.PaymentStatusPaid,
 		StatusTimestamp: time.Date(2026, time.June, 18, 10, 0, 0, 0, time.UTC),
 	}
-	event := paymentProcessorEvent("evt_501", current.PaymentID, webhook.EventTypePaymentPaid, current.StatusTimestamp.Add(5*time.Minute))
+	event := paymentProcessorEvent("evt_501", current.PaymentID, webhook.EventTypePaymentPending, current.StatusTimestamp.Add(-5*time.Minute))
 
 	anomalies := DetectAnomalies(current, event, 41)
 	if len(anomalies) != 1 {
@@ -26,7 +26,7 @@ func TestDetectAnomaliesRecordsPaidAfterFailed(t *testing.T) {
 	assertAnomalyRecord(t, anomalies[0], repository.Anomaly{
 		WebhookEventID: 41,
 		PaymentID:      current.PaymentID,
-		AnomalyType:    repository.AnomalyTypePaidAfterFailed,
+		AnomalyType:    repository.AnomalyTypeStaleEvent,
 		Details: repository.AnomalyDetails{
 			ProviderEventID:   event.ProviderEventID,
 			CurrentStatus:     current.Status,
@@ -37,7 +37,7 @@ func TestDetectAnomaliesRecordsPaidAfterFailed(t *testing.T) {
 	})
 }
 
-func TestDetectAnomaliesRecordsFailedAfterPaid(t *testing.T) {
+func TestDetectAnomaliesRecordsUnexpectedNonTerminalTransition(t *testing.T) {
 	t.Parallel()
 
 	current := repository.Payment{
@@ -55,7 +55,7 @@ func TestDetectAnomaliesRecordsFailedAfterPaid(t *testing.T) {
 	assertAnomalyRecord(t, anomalies[0], repository.Anomaly{
 		WebhookEventID: 42,
 		PaymentID:      current.PaymentID,
-		AnomalyType:    repository.AnomalyTypeFailedAfterPaid,
+		AnomalyType:    repository.AnomalyTypeUnexpectedTransition,
 		Details: repository.AnomalyDetails{
 			ProviderEventID:   event.ProviderEventID,
 			CurrentStatus:     current.Status,
@@ -66,7 +66,7 @@ func TestDetectAnomaliesRecordsFailedAfterPaid(t *testing.T) {
 	})
 }
 
-func TestDetectAnomaliesRecordsOlderEventTimestampAlongsideStatusAnomaly(t *testing.T) {
+func TestDetectAnomaliesDoesNotStackTransitionAnomalyOnStaleEvent(t *testing.T) {
 	t.Parallel()
 
 	current := repository.Payment{
@@ -77,14 +77,14 @@ func TestDetectAnomaliesRecordsOlderEventTimestampAlongsideStatusAnomaly(t *test
 	event := paymentProcessorEvent("evt_503", current.PaymentID, webhook.EventTypePaymentFailed, current.StatusTimestamp.Add(-5*time.Minute))
 
 	anomalies := DetectAnomalies(current, event, 43)
-	if len(anomalies) != 2 {
-		t.Fatalf("expected 2 anomalies, got %d", len(anomalies))
+	if len(anomalies) != 1 {
+		t.Fatalf("expected 1 anomaly, got %d", len(anomalies))
 	}
 
 	assertAnomalyRecord(t, anomalies[0], repository.Anomaly{
 		WebhookEventID: 43,
 		PaymentID:      current.PaymentID,
-		AnomalyType:    repository.AnomalyTypeFailedAfterPaid,
+		AnomalyType:    repository.AnomalyTypeStaleEvent,
 		Details: repository.AnomalyDetails{
 			ProviderEventID:   event.ProviderEventID,
 			CurrentStatus:     current.Status,
@@ -93,11 +93,27 @@ func TestDetectAnomaliesRecordsOlderEventTimestampAlongsideStatusAnomaly(t *test
 			IncomingTimestamp: event.EventTimestamp,
 		},
 	})
+}
 
-	assertAnomalyRecord(t, anomalies[1], repository.Anomaly{
-		WebhookEventID: 43,
+func TestDetectAnomaliesRecordsInvalidTerminalTransition(t *testing.T) {
+	t.Parallel()
+
+	current := repository.Payment{
+		PaymentID:       "pay_503_b",
+		Status:          webhook.PaymentStatusChargeback,
+		StatusTimestamp: time.Date(2026, time.June, 18, 12, 30, 0, 0, time.UTC),
+	}
+	event := paymentProcessorEvent("evt_503_b", current.PaymentID, webhook.EventTypePaymentRefunded, current.StatusTimestamp.Add(5*time.Minute))
+
+	anomalies := DetectAnomalies(current, event, 46)
+	if len(anomalies) != 1 {
+		t.Fatalf("expected 1 anomaly, got %d", len(anomalies))
+	}
+
+	assertAnomalyRecord(t, anomalies[0], repository.Anomaly{
+		WebhookEventID: 46,
 		PaymentID:      current.PaymentID,
-		AnomalyType:    repository.AnomalyTypeOlderEventTimestamp,
+		AnomalyType:    repository.AnomalyTypeInvalidTerminalTransition,
 		Details: repository.AnomalyDetails{
 			ProviderEventID:   event.ProviderEventID,
 			CurrentStatus:     current.Status,
