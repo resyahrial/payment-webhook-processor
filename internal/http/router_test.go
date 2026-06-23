@@ -1,0 +1,120 @@
+package http
+
+import (
+	"encoding/json"
+	stdhttp "net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	appmetrics "payment-webhook-processor/internal/metrics"
+)
+
+func TestNewRouterServesHealthz(t *testing.T) {
+	router := NewRouter(nil, nil)
+	req := httptest.NewRequest(stdhttp.MethodGet, "/healthz", nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+
+	if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
+		t.Fatalf("expected content type application/json, got %q", contentType)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("expected valid json response, got error %v", err)
+	}
+
+	if payload["status"] != "ok" {
+		t.Fatalf("expected status payload ok, got %q", payload["status"])
+	}
+}
+
+func TestNewRouterServesWebhookRoute(t *testing.T) {
+	handlerCalled := false
+	router := NewRouter(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		handlerCalled = true
+		w.WriteHeader(stdhttp.StatusNoContent)
+	}), nil)
+	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	if !handlerCalled {
+		t.Fatal("expected webhook handler to be called")
+	}
+
+	if recorder.Code != stdhttp.StatusNoContent {
+		t.Fatalf("expected status 204, got %d", recorder.Code)
+	}
+}
+
+func TestNewRouterPropagatesRequestIDHeader(t *testing.T) {
+	t.Parallel()
+
+	var gotRequestID string
+	router := NewRouter(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		gotRequestID = RequestIDFromContext(r.Context())
+		w.WriteHeader(stdhttp.StatusNoContent)
+	}), nil)
+	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", nil)
+	req.Header.Set(requestIDHeader, "req_123")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	if gotRequestID != "req_123" {
+		t.Fatalf("expected propagated request id, got %q", gotRequestID)
+	}
+}
+
+func TestNewRouterServesMetricsRoute(t *testing.T) {
+	m := appmetrics.New()
+	m.IncWebhookRequest()
+	m.IncWebhookSuccess("processed")
+	router := NewRouter(nil, m.Handler())
+	req := httptest.NewRequest(stdhttp.MethodGet, "/metrics", nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != stdhttp.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+
+	if contentType := recorder.Header().Get("Content-Type"); !strings.Contains(contentType, "text/plain") {
+		t.Fatalf("expected prometheus content type, got %q", contentType)
+	}
+
+	if !strings.Contains(recorder.Body.String(), "go_gc_duration_seconds") {
+		t.Fatalf("expected metrics payload, got %q", recorder.Body.String())
+	}
+
+	if !strings.Contains(recorder.Body.String(), "payment_webhook_requests_total") {
+		t.Fatalf("expected custom app metrics in payload, got %q", recorder.Body.String())
+	}
+}
+
+func TestNewRouterGeneratesRequestIDWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	var gotRequestID string
+	router := NewRouter(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		gotRequestID = RequestIDFromContext(r.Context())
+		w.WriteHeader(stdhttp.StatusNoContent)
+	}), nil)
+	req := httptest.NewRequest(stdhttp.MethodPost, "/webhooks/payment", nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, req)
+
+	if gotRequestID == "" {
+		t.Fatal("expected generated request id")
+	}
+}
